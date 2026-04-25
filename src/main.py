@@ -1,7 +1,12 @@
 import asyncio
 import sys
-from core.bot import MyBot
-from core.config import config
+import os
+
+# Adiciona o diretório pai ao path do Python
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.core.bot import MyBot
+from src.core.config import config
 
 async def main():
     bot = MyBot()
@@ -9,7 +14,4 @@ async def main():
         await bot.start(config.TOKEN)
 
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    
     asyncio.run(main())
