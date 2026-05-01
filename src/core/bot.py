@@ -16,6 +16,7 @@ class MyBot(commands.Bot):
         cogs = [
             'cogs.utils',
             'cogs.voice_logs',
+            'cogs.sync',
         ]
         
         for cog in cogs:
