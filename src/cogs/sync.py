@@ -18,19 +18,8 @@ class Sync(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def sync_slash(self, interaction: discord.Interaction):
         """Comando slash /sync"""
-        await self._do_sync(interaction)
-    
-    @commands.command(name="sync", description="Sincroniza servidores com a API")
-    @commands.has_permissions(administrator=True)
-    async def sync_prefix(self, ctx: commands.Context):
-        """Comando prefix !sync"""
-        await self._do_sync(ctx)
-    
-    async def _do_sync(self, context):
-        """Executa a sincronização"""
-        await context.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
         
-        # Pega IDs de todas as guilds que o bot está
         guild_ids = [guild.id for guild in self.bot.guilds]
         
         try:
@@ -46,34 +35,47 @@ class Sync(commands.Cog):
                             title="🔄 Sincronização concluída",
                             color=discord.Color.green()
                         )
-                        embed.add_field(
-                            name="✅ Criadas",
-                            value=str(len(data["created"])),
-                            inline=True
-                        )
-                        embed.add_field(
-                            name="✔️ Já existiam",
-                            value=str(len(data["existing"])),
-                            inline=True
-                        )
-                        embed.add_field(
-                            name="📊 Total",
-                            value=str(data["total"]),
-                            inline=True
-                        )
+                        embed.add_field(name="✅ Criadas", value=str(len(data["created"])), inline=True)
+                        embed.add_field(name="✔️ Já existiam", value=str(len(data["existing"])), inline=True)
+                        embed.add_field(name="📊 Total", value=str(data["total"]), inline=True)
                         
-                        await context.send(embed=embed, ephemeral=True)
+                        await interaction.followup.send(embed=embed, ephemeral=True)
                     else:
-                        await context.send(
-                            f"❌ Erro na API: {response.status}",
-                            ephemeral=True
-                        )
+                        await interaction.followup.send(f"❌ Erro na API: {response.status}", ephemeral=True)
         
         except aiohttp.ClientError as e:
-            await context.send(
-                f"❌ Erro ao comunicar com a API: {e}",
-                ephemeral=True
-            )
+            await interaction.followup.send(f"❌ Erro ao comunicar com a API: {e}", ephemeral=True)
+    
+    @commands.command(name="sync", description="Sincroniza servidores com a API")
+    @commands.has_permissions(administrator=True)
+    async def sync_prefix(self, ctx: commands.Context):
+        """Comando prefix !sync"""
+        async with ctx.typing():
+            guild_ids = [guild.id for guild in self.bot.guilds]
+            
+            try:
+                async with aiohttp.ClientSession(auth=self.auth) as session:
+                    async with session.post(
+                        f"{self.api_url}/guilds/sync",
+                        json=guild_ids
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            
+                            embed = discord.Embed(
+                                title="🔄 Sincronização concluída",
+                                color=discord.Color.green()
+                            )
+                            embed.add_field(name="✅ Criadas", value=str(len(data["created"])), inline=True)
+                            embed.add_field(name="✔️ Já existiam", value=str(len(data["existing"])), inline=True)
+                            embed.add_field(name="📊 Total", value=str(data["total"]), inline=True)
+                            
+                            await ctx.send(embed=embed)
+                        else:
+                            await ctx.send(f"❌ Erro na API: {response.status}")
+            
+            except aiohttp.ClientError as e:
+                await ctx.send(f"❌ Erro ao comunicar com a API: {e}")
     
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
