@@ -36,7 +36,7 @@ class Sync(commands.Cog):
         try:
             async with aiohttp.ClientSession(auth=self.auth) as session:
                 async with session.post(
-                    f"{self.api_url}/sync",
+                    f"{self.api_url}/guilds/sync",
                     json=guild_ids
                 ) as response:
                     if response.status == 200:
@@ -81,7 +81,7 @@ class Sync(commands.Cog):
         try:
             async with aiohttp.ClientSession(auth=self.auth) as session:
                 async with session.post(
-                    f"{self.api_url}/sync",
+                    f"{self.api_url}/guilds/sync",
                     json=[guild.id]
                 ) as response:
                     if response.status == 200:
