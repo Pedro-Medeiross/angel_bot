@@ -17,7 +17,8 @@ class MyBot(commands.Bot):
             'cogs.utils',
             'cogs.voice_logs',
             'cogs.sync',
-            'cogs.stats'
+            'cogs.stats',
+            "cogs.message_logs"
         ]
         
         for cog in cogs:
