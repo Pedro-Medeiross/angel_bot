@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import aiohttp
 from src.core.config import config
+from src.utils.log_api import log_api
 
 class VoiceLogs(commands.Cog):
     """Detecta eventos de voz e pergunta pra API onde logar"""
@@ -12,7 +13,8 @@ class VoiceLogs(commands.Cog):
         self.api_user = config.API_USER
         self.api_pass = config.API_PASS
         self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
-        
+        self.log_api = log_api
+    
     async def get_log_channel(self, guild_id: int, log_type: str) -> int | None:
         """Pergunta pra API qual canal usar para esse tipo de log"""
         try:
@@ -27,7 +29,7 @@ class VoiceLogs(commands.Cog):
         
         return None
     
-    def create_voice_embed(self, member: discord.Member, action: str, 
+    def create_voice_embed(self, member: discord.Member, action: str,
                            channel_name: str, old_channel_name: str = None) -> discord.Embed:
         """Cria embed formatado para logs de voz"""
         
@@ -85,24 +87,35 @@ class VoiceLogs(commands.Cog):
         else:
             return
         
-        # Pergunta pra API qual canal usar
+        # 1️⃣ Busca canal de log do Discord
         log_channel_id = await self.get_log_channel(guild.id, action)
         
-        if not log_channel_id:
-            return
+        # 2️⃣ Envia embed pro Discord (se tiver canal)
+        if log_channel_id:
+            log_channel = guild.get_channel(log_channel_id)
+            if log_channel:
+                embed = self.create_voice_embed(
+                    member=member,
+                    action=action,
+                    channel_name=channel.name,
+                    old_channel_name=old_channel.name if old_channel else None
+                )
+                await log_channel.send(embed=embed)
         
-        log_channel = guild.get_channel(log_channel_id)
-        if not log_channel:
-            return
-        
-        # Cria e envia embed
-        embed = self.create_voice_embed(
-            member=member,
-            action=action,
-            channel_name=channel.name,
-            old_channel_name=old_channel.name if old_channel else None
+        # 3️⃣ Envia log pra API (dashboard/WebSocket)
+        await self.log_api.send_log(
+            guild_id=guild.id,
+            log_type=action,
+            user_id=member.id,
+            channel_id=channel.id,
+            data={
+                "member_name": str(member),
+                "member_avatar": str(member.display_avatar.url),
+                "channel_name": channel.name,
+                "old_channel_name": old_channel.name if old_channel else None,
+                "members_in_channel": len(channel.members)
+            }
         )
-        await log_channel.send(embed=embed)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VoiceLogs(bot))
