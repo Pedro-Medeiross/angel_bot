@@ -30,7 +30,8 @@ class VoiceLogs(commands.Cog):
         return None
     
     def create_voice_embed(self, member: discord.Member, action: str,
-                           channel_name: str, old_channel_name: str = None) -> discord.Embed:
+                           channel: discord.VoiceChannel,
+                           old_channel: discord.VoiceChannel = None) -> discord.Embed:
         """Cria embed formatado para logs de voz"""
         
         colors = {
@@ -41,13 +42,13 @@ class VoiceLogs(commands.Cog):
         
         if action == 'voice_join':
             title = '🎤 Entrou em canal de voz'
-            description = f'{member.mention} entrou em {channel_name}'
+            description = f'{member.mention} entrou em {channel.mention}'
         elif action == 'voice_leave':
             title = '🔇 Saiu de canal de voz'
-            description = f'{member.mention} saiu de {channel_name}'
+            description = f'{member.mention} saiu de {channel.mention}'
         elif action == 'voice_move':
             title = '🔄 Trocou de canal de voz'
-            description = f'{member.mention} moveu de {old_channel_name} para {channel_name}'
+            description = f'{member.mention} moveu de {old_channel.mention} para {channel.mention}'
         
         embed = discord.Embed(
             title=title,
@@ -97,8 +98,8 @@ class VoiceLogs(commands.Cog):
                 embed = self.create_voice_embed(
                     member=member,
                     action=action,
-                    channel_name=channel.name,
-                    old_channel_name=old_channel.name if old_channel else None
+                    channel=channel,
+                    old_channel=old_channel
                 )
                 await log_channel.send(embed=embed)
         
