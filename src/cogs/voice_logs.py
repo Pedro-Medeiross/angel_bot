@@ -13,12 +13,11 @@ class VoiceLogs(commands.Cog):
         self.api_pass = config.API_PASS
         self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
         
-        
     async def get_log_channel(self, guild_id: int, log_type: str) -> int | None:
         """Pergunta pra API qual canal usar para esse tipo de log"""
         try:
             async with aiohttp.ClientSession(auth=self.auth) as session:
-                url = f"{self.api_url}/guilds/{guild_id}/log_channel/{log_type}"
+                url = f"{self.api_url}/guilds/{guild_id}/log-channel/{log_type}"
                 async with session.get(url) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -28,7 +27,8 @@ class VoiceLogs(commands.Cog):
         
         return None
     
-    def create_voice_embed(self, member: discord.Member, action: str, channel_name: str, old_channel_name: str = None) -> discord.Embed:
+    def create_voice_embed(self, member: discord.Member, action: str, 
+                           channel_name: str, old_channel_name: str = None) -> discord.Embed:
         """Cria embed formatado para logs de voz"""
         
         colors = {
@@ -46,18 +46,17 @@ class VoiceLogs(commands.Cog):
         elif action == 'move':
             title = '🔄 Trocou de canal de voz'
             description = f'{member.mention} moveu de {old_channel_name} para {channel_name}'
-            
-        embed = discord.Ember(
-            title = title,
-            description = description,
-            color = colors.get(action, discord.Color.blue()),
-            timestamp = discord.utils.utcnow()
+        
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=colors.get(action, discord.Color.blue()),
+            timestamp=discord.utils.utcnow()
         )
         embed.set_author(name=str(member), icon_url=member.display_avatar.url)
         embed.set_footer(text=f"ID: {member.id}")
         
         return embed
-    
     
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member,
@@ -70,7 +69,7 @@ class VoiceLogs(commands.Cog):
         
         guild = member.guild
         
-         # Determina ação
+        # Determina ação
         if before.channel is None and after.channel is not None:
             action = 'join'
             channel = after.channel
@@ -103,7 +102,7 @@ class VoiceLogs(commands.Cog):
             channel_name=channel.name,
             old_channel_name=old_channel.name if old_channel else None
         )
-        await log_channel.sned(embed=embed)
-        
+        await log_channel.send(embed=embed)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(VoiceLogs(bot))
