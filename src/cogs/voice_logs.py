@@ -32,18 +32,18 @@ class VoiceLogs(commands.Cog):
         """Cria embed formatado para logs de voz"""
         
         colors = {
-            'join': discord.Color.green(),
-            'leave': discord.Color.red(),
-            'move': discord.Color.orange(),
+            'voice_join': discord.Color.green(),
+            'voice_leave': discord.Color.red(),
+            'voice_move': discord.Color.orange(),
         }
         
-        if action == 'join':
+        if action == 'voice_join':
             title = '🎤 Entrou em canal de voz'
             description = f'{member.mention} entrou em {channel_name}'
-        elif action == 'leave':
+        elif action == 'voice_leave':
             title = '🔇 Saiu de canal de voz'
             description = f'{member.mention} saiu de {channel_name}'
-        elif action == 'move':
+        elif action == 'voice_move':
             title = '🔄 Trocou de canal de voz'
             description = f'{member.mention} moveu de {old_channel_name} para {channel_name}'
         
@@ -71,22 +71,22 @@ class VoiceLogs(commands.Cog):
         
         # Determina ação
         if before.channel is None and after.channel is not None:
-            action = 'join'
+            action = 'voice_join'
             channel = after.channel
             old_channel = None
         elif before.channel is not None and after.channel is None:
-            action = 'leave'
+            action = 'voice_leave'
             channel = before.channel
             old_channel = None
         elif before.channel and after.channel and before.channel != after.channel:
-            action = 'move'
+            action = 'voice_move'
             channel = after.channel
             old_channel = before.channel
         else:
             return
         
         # Pergunta pra API qual canal usar
-        log_channel_id = await self.get_log_channel(guild.id, "voice")
+        log_channel_id = await self.get_log_channel(guild.id, action)
         
         if not log_channel_id:
             return
