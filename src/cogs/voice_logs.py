@@ -109,11 +109,13 @@ class VoiceLogs(commands.Cog):
             user_id=member.id,
             channel_id=channel.id,
             data={
-                "member_name": str(member),
-                "member_avatar": str(member.display_avatar.url),
+                "user_name": str(member),
+                "user_avatar": str(member.display_avatar.url),
                 "channel_name": channel.name,
+                "channel_id": str(channel.id),
+                "members_in_channel": len(channel.members),
                 "old_channel_name": old_channel.name if old_channel else None,
-                "members_in_channel": len(channel.members)
+                "old_channel_id": str(old_channel.id) if old_channel else None
             }
         )
 
