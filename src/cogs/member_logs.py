@@ -5,7 +5,7 @@ from src.core.config import config
 from src.utils.log_api import log_api
 
 class MemberLogs(commands.Cog):
-    """Logs de eventos de membro"""
+    """Logs de eventos de membro (timeout, ban, unban)"""
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -39,42 +39,7 @@ class MemberLogs(commands.Cog):
     
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        """Log de mudanças no membro (nickname, roles, timeout)"""
-        
-        # Nickname
-        if before.nick != after.nick:
-            log_channel_id = await self.get_log_channel(after.guild.id, "nickname_change")
-            
-            if log_channel_id:
-                log_channel = after.guild.get_channel(log_channel_id)
-                if log_channel:
-                    embed = discord.Embed(
-                        title="📝 Apelido alterado",
-                        color=discord.Color.orange(),
-                        timestamp=discord.utils.utcnow()
-                    )
-                    embed.set_author(name=str(after), icon_url=after.display_avatar.url)
-                    embed.set_footer(text=f"ID: {after.id}")
-                    
-                    old_nick = before.nick or str(before)
-                    new_nick = after.nick or str(after)
-                    
-                    embed.add_field(name="❌ Antes", value=old_nick, inline=True)
-                    embed.add_field(name="✅ Depois", value=new_nick, inline=True)
-                    embed.description = f"{after.mention} alterou o apelido"
-                    
-                    await log_channel.send(embed=embed)
-            
-            await self.log_api.send_log(
-                guild_id=after.guild.id,
-                log_type="nickname_change",
-                user_id=after.id,
-                data={
-                    "user_name": str(after),
-                    "old_nickname": before.nick or str(before),
-                    "new_nickname": after.nick or str(after)
-                }
-            )
+        """Log de timeout"""
         
         # Timeout (via bot/API)
         if before.timed_out != after.timed_out:
@@ -97,8 +62,8 @@ class MemberLogs(commands.Cog):
                             color=discord.Color.red(),
                             timestamp=discord.utils.utcnow()
                         )
-                        embed.set_author(name=str(after), icon_url=after.display_avatar.url)
-                        embed.set_footer(text=f"ID: {after.id}")
+                        embed.set_author(name=after.display_name, icon_url=after.display_avatar.url)
+                        embed.set_footer(text=f"ID: {after.id} | @{after.name}")
                         
                         embed.add_field(name="👤 Membro", value=after.mention, inline=True)
                         if moderator:
@@ -116,10 +81,10 @@ class MemberLogs(commands.Cog):
                 await self.log_api.send_log(
                     guild_id=after.guild.id,
                     log_type="member_timeout",
-                    user_id=None,
                     target_id=after.id,
                     data={
-                        "target_name": str(after),
+                        "user_name": after.name,
+                        "display_name": after.display_name,
                         "moderator_name": moderator,
                         "action": "applied",
                         "expires_at": timeout_until.isoformat() if timeout_until else None
@@ -134,8 +99,8 @@ class MemberLogs(commands.Cog):
                             color=discord.Color.green(),
                             timestamp=discord.utils.utcnow()
                         )
-                        embed.set_author(name=str(after), icon_url=after.display_avatar.url)
-                        embed.set_footer(text=f"ID: {after.id}")
+                        embed.set_author(name=after.display_name, icon_url=after.display_avatar.url)
+                        embed.set_footer(text=f"ID: {after.id} | @{after.name}")
                         
                         embed.add_field(name="👤 Membro", value=after.mention, inline=True)
                         if moderator:
@@ -146,10 +111,10 @@ class MemberLogs(commands.Cog):
                 await self.log_api.send_log(
                     guild_id=after.guild.id,
                     log_type="member_timeout",
-                    user_id=None,
                     target_id=after.id,
                     data={
-                        "target_name": str(after),
+                        "user_name": after.name,
+                        "display_name": after.display_name,
                         "moderator_name": moderator,
                         "action": "removed"
                     }
@@ -180,8 +145,8 @@ class MemberLogs(commands.Cog):
                     color=discord.Color.dark_red(),
                     timestamp=discord.utils.utcnow()
                 )
-                embed.set_author(name=str(user), icon_url=user.display_avatar.url)
-                embed.set_footer(text=f"ID: {user.id}")
+                embed.set_author(name=user.global_name or user.name, icon_url=user.display_avatar.url)
+                embed.set_footer(text=f"ID: {user.id} | @{user.name}")
                 
                 embed.add_field(name="👤 Usuário", value=f"{user.name}", inline=True)
                 if moderator:
@@ -196,8 +161,8 @@ class MemberLogs(commands.Cog):
             log_type="member_ban",
             target_id=user.id,
             data={
-                "target_name": str(user),
-                "target_avatar": str(user.display_avatar.url),
+                "user_name": user.name,
+                "display_name": user.global_name,
                 "moderator_name": moderator,
                 "reason": reason
             }
@@ -226,8 +191,8 @@ class MemberLogs(commands.Cog):
                     color=discord.Color.green(),
                     timestamp=discord.utils.utcnow()
                 )
-                embed.set_author(name=str(user), icon_url=user.display_avatar.url)
-                embed.set_footer(text=f"ID: {user.id}")
+                embed.set_author(name=user.global_name or user.name, icon_url=user.display_avatar.url)
+                embed.set_footer(text=f"ID: {user.id} | @{user.name}")
                 
                 embed.add_field(name="👤 Usuário", value=f"{user.name}", inline=True)
                 if moderator:
@@ -240,8 +205,8 @@ class MemberLogs(commands.Cog):
             log_type="member_unban",
             target_id=user.id,
             data={
-                "target_name": str(user),
-                "target_avatar": str(user.display_avatar.url),
+                "user_name": user.name,
+                "display_name": user.global_name,
                 "moderator_name": moderator
             }
         )
