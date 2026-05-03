@@ -56,7 +56,7 @@ class MessageLogs(commands.Cog):
             for a in message.attachments
         )
         
-        # 1️⃣ Log principal: message_delete
+        # Log principal: message_delete
         log_channel_id = await self.get_log_channel(message.guild.id, "message_delete")
         
         if log_channel_id:
@@ -71,14 +71,28 @@ class MessageLogs(commands.Cog):
                 embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
                 embed.set_footer(text=f"ID: {message.author.id} | @{message.author.name}")
                 
-                if message.content:
-                    embed.add_field(name="💬 Conteúdo", value=message.content[:1024], inline=False)
-                
-                if message.attachments:
-                    attachments = "\n".join([a.url for a in message.attachments])
-                    embed.add_field(name="📎 Anexos", value=attachments[:1024], inline=False)
-                
-                await log_channel.send(embed=embed)
+                # Se conteúdo maior que 1024, envia como arquivo
+                if message.content and len(message.content) > 1024:
+                    txt_file = discord.File(
+                        StringIO(message.content),
+                        filename=f"deleted_{message.id}.txt"
+                    )
+                    embed.add_field(name="💬 Conteúdo", value="*Mensagem longa, veja o arquivo anexo*", inline=False)
+                    
+                    if message.attachments:
+                        attachments = "\n".join([a.url for a in message.attachments])
+                        embed.add_field(name="📎 Anexos", value=attachments[:1024], inline=False)
+                    
+                    await log_channel.send(embed=embed, file=txt_file)
+                else:
+                    if message.content:
+                        embed.add_field(name="💬 Conteúdo", value=message.content or "*vazio*", inline=False)
+                    
+                    if message.attachments:
+                        attachments = "\n".join([a.url for a in message.attachments])
+                        embed.add_field(name="📎 Anexos", value=attachments[:1024], inline=False)
+                    
+                    await log_channel.send(embed=embed)
         
         await self.log_api.send_log(
             guild_id=message.guild.id,
@@ -98,7 +112,7 @@ class MessageLogs(commands.Cog):
             }
         )
         
-        # 2️⃣ image_delete
+        # image_delete
         if has_image:
             image_channel_id = await self.get_log_channel(message.guild.id, "image_delete")
             
@@ -158,12 +172,23 @@ class MessageLogs(commands.Cog):
                 )
                 embed.set_author(name=before.author.display_name, icon_url=before.author.display_avatar.url)
                 embed.set_footer(text=f"ID: {before.author.id} | @{before.author.name}")
-                
-                embed.add_field(name="❌ Antes", value=before.content[:1024] or "*vazio*", inline=False)
-                embed.add_field(name="✅ Depois", value=after.content[:1024] or "*vazio*", inline=False)
                 embed.add_field(name="🔗 Link", value=f"[Ir para mensagem]({after.jump_url})", inline=False)
                 
-                await log_channel.send(embed=embed)
+                # Verifica se algum conteúdo é maior que 1024
+                content_long = len(before.content) > 1024 or len(after.content) > 1024
+                
+                if content_long:
+                    txt_content = f"=== ANTES ===\n{before.content or '*vazio*'}\n\n=== DEPOIS ===\n{after.content or '*vazio*'}"
+                    txt_file = discord.File(
+                        StringIO(txt_content),
+                        filename=f"edited_{after.id}.txt"
+                    )
+                    embed.add_field(name="📝 Conteúdo", value="*Mensagem longa, veja o arquivo anexo*", inline=False)
+                    await log_channel.send(embed=embed, file=txt_file)
+                else:
+                    embed.add_field(name="❌ Antes", value=before.content[:1024] or "*vazio*", inline=False)
+                    embed.add_field(name="✅ Depois", value=after.content[:1024] or "*vazio*", inline=False)
+                    await log_channel.send(embed=embed)
         
         await self.log_api.send_log(
             guild_id=before.guild.id,
