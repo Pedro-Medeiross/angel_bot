@@ -40,7 +40,7 @@ class ServerLogs(commands.Cog):
                 if not member:
                     continue
                 
-                log_channel_id = await self.get_log_channel(guild.id, "member_avatar_update")
+                log_channel_id = await self.get_log_channel(guild.id, "avatar_update")
                 
                 if log_channel_id:
                     log_channel = guild.get_channel(log_channel_id)
@@ -63,7 +63,7 @@ class ServerLogs(commands.Cog):
                 
                 await self.log_api.send_log(
                     guild_id=guild.id,
-                    log_type="member_avatar_update",
+                    log_type="avatar_update",
                     user_id=member.id,
                     data={
                         "user_name": str(member),
@@ -80,7 +80,7 @@ class ServerLogs(commands.Cog):
                 if not member:
                     continue
                 
-                log_channel_id = await self.get_log_channel(guild.id, "member_avatar_update")
+                log_channel_id = await self.get_log_channel(guild.id, "avatar_update")
                 
                 if log_channel_id:
                     log_channel = guild.get_channel(log_channel_id)
@@ -103,7 +103,7 @@ class ServerLogs(commands.Cog):
                 
                 await self.log_api.send_log(
                     guild_id=guild.id,
-                    log_type="member_avatar_update",
+                    log_type="avatar_update",
                     user_id=member.id,
                     data={
                         "user_name": str(member),
@@ -121,7 +121,7 @@ class ServerLogs(commands.Cog):
         
         # Avatar do servidor
         if before.icon != after.icon:
-            log_channel_id = await self.get_log_channel(after.id, "member_avatar_update")
+            log_channel_id = await self.get_log_channel(after.id, "avatar_update")
             
             if log_channel_id:
                 log_channel = after.get_channel(log_channel_id)
@@ -143,7 +143,7 @@ class ServerLogs(commands.Cog):
             
             await self.log_api.send_log(
                 guild_id=after.id,
-                log_type="member_avatar_update",
+                log_type="avatar_update",
                 data={
                     "server_name": after.name,
                     "type": "server_icon",
@@ -154,7 +154,7 @@ class ServerLogs(commands.Cog):
         
         # Banner do servidor
         if before.banner != after.banner:
-            log_channel_id = await self.get_log_channel(after.id, "member_avatar_update")
+            log_channel_id = await self.get_log_channel(after.id, "avatar_update")
             
             if log_channel_id:
                 log_channel = after.get_channel(log_channel_id)
@@ -175,7 +175,7 @@ class ServerLogs(commands.Cog):
             
             await self.log_api.send_log(
                 guild_id=after.id,
-                log_type="member_avatar_update",
+                log_type="avatar_update",
                 data={
                     "server_name": after.name,
                     "type": "server_banner",
