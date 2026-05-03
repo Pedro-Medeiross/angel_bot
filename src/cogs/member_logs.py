@@ -1,7 +1,6 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import aiohttp
-from datetime import datetime, timezone, timedelta
 from src.core.config import config
 from src.utils.log_api import log_api
 
@@ -15,11 +14,6 @@ class MemberLogs(commands.Cog):
         self.api_pass = config.API_PASS
         self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
         self.log_api = log_api
-        self.last_audit_check = datetime.now(timezone.utc)
-        self.check_timeouts.start()
-    
-    def cog_unload(self):
-        self.check_timeouts.cancel()
     
     async def get_log_channel(self, guild_id: int, log_type: str) -> int | None:
         try:
@@ -43,91 +37,13 @@ class MemberLogs(commands.Cog):
             pass
         return None
     
-    # ═══════════════ AUDIT LOG POLLING (TIMEOUT MANUAL) ═══════════════
-    
-    @tasks.loop(seconds=10)
-    async def check_timeouts(self):
-        """Verifica audit log por timeouts aplicados manualmente"""
-        for guild in self.bot.guilds:
-            if not guild.me.guild_permissions.view_audit_log:
-                continue
-            
-            log_channel_id = await self.get_log_channel(guild.id, "member_timeout")
-            if not log_channel_id:
-                continue
-            
-            try:
-                async for entry in guild.audit_logs(
-                    limit=5,
-                    after=self.last_audit_check,
-                    action=discord.AuditLogAction.member_update
-                ):
-                    changes = getattr(entry, 'changes', None)
-                    if not changes:
-                        continue
-                    
-                    after_changes = changes.after if hasattr(changes, 'after') else changes.get('after', {})
-                    timed_out_until = after_changes.get('communication_disabled_until') if isinstance(after_changes, dict) else None
-                    
-                    if timed_out_until:
-                        target = entry.target
-                        moderator = entry.user
-                        
-                        if target:
-                            log_channel = guild.get_channel(log_channel_id)
-                            if log_channel:
-                                embed = discord.Embed(
-                                    title="🔇 Membro silenciado (timeout)",
-                                    color=discord.Color.red(),
-                                    timestamp=discord.utils.utcnow()
-                                )
-                                embed.set_author(name=str(target), icon_url=target.display_avatar.url)
-                                embed.set_footer(text=f"ID: {target.id}")
-                                embed.add_field(name="👤 Membro", value=target.mention, inline=True)
-                                if moderator:
-                                    embed.add_field(name="🛡️ Moderador", value=str(moderator), inline=True)
-                                
-                                if timed_out_until:
-                                    embed.add_field(
-                                        name="⏰ Expira",
-                                        value=discord.utils.format_dt(timed_out_until, 'R'),
-                                        inline=False
-                                    )
-                                
-                                await log_channel.send(embed=embed)
-                            
-                            await self.log_api.send_log(
-                                guild_id=guild.id,
-                                log_type="member_timeout",
-                                user_id=moderator.id if moderator else None,
-                                target_id=target.id,
-                                data={
-                                    "target_name": str(target),
-                                    "moderator_name": str(moderator) if moderator else "Unknown",
-                                    "action": "applied",
-                                    "expires_at": timed_out_until.isoformat() if timed_out_until else None
-                                }
-                            )
-            except discord.Forbidden:
-                pass
-            except Exception as e:
-                print(f"❌ Erro check_timeouts {guild.name}: {e}")
-        
-        self.last_audit_check = datetime.now(timezone.utc) - timedelta(seconds=5)
-    
-    @check_timeouts.before_loop
-    async def before_check_timeouts(self):
-        await self.bot.wait_until_ready()
-    
-    # ═══════════════ MEMBER UPDATE ═══════════════
-    
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        """Log de mudanças no membro (nickname, roles, timeout via API)"""
+        """Log de mudanças no membro (nickname, roles, timeout)"""
         
         # Nickname
         if before.nick != after.nick:
-            log_channel_id = await self.get_log_channel(after.guild.id, "member_nickname")
+            log_channel_id = await self.get_log_channel(after.guild.id, "nickname_change")
             
             if log_channel_id:
                 log_channel = after.guild.get_channel(log_channel_id)
@@ -151,7 +67,7 @@ class MemberLogs(commands.Cog):
             
             await self.log_api.send_log(
                 guild_id=after.guild.id,
-                log_type="member_nickname",
+                log_type="nickname_change",
                 user_id=after.id,
                 data={
                     "user_name": str(after),
@@ -238,8 +154,6 @@ class MemberLogs(commands.Cog):
                         "action": "removed"
                     }
                 )
-    
-    # ═══════════════ BAN / UNBAN ═══════════════
     
     @commands.Cog.listener()
     async def on_member_ban(self, guild: discord.Guild, user: discord.User | discord.Member):
