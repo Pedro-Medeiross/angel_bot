@@ -20,6 +20,7 @@ class MyBot(commands.Bot):
             'cogs.stats',
             "cogs.message_logs",
             "cogs.server_logs",
+            "cogs.member_logs",
         ]
         
         for cog in cogs:
