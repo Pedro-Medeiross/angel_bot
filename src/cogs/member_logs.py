@@ -51,7 +51,6 @@ class MemberLogs(commands.Cog):
                     
                     embed.add_field(name="❌ Antes", value=old_nick, inline=True)
                     embed.add_field(name="✅ Depois", value=new_nick, inline=True)
-                    
                     embed.description = f"{after.mention} alterou o apelido"
                     
                     await log_channel.send(embed=embed)
@@ -66,6 +65,141 @@ class MemberLogs(commands.Cog):
                     "new_nickname": after.nick or str(after)
                 }
             )
+        
+        # Timeout
+        if before.timed_out != after.timed_out:
+            log_channel_id = await self.get_log_channel(after.guild.id, "member_timeout")
+            
+            if after.timed_out:
+                # Timeout aplicado
+                timeout_until = after.communication_disabled_until
+                
+                if log_channel_id:
+                    log_channel = after.guild.get_channel(log_channel_id)
+                    if log_channel:
+                        embed = discord.Embed(
+                            title="🔇 Membro silenciado (timeout)",
+                            description=f"{after.mention} foi silenciado",
+                            color=discord.Color.red(),
+                            timestamp=discord.utils.utcnow()
+                        )
+                        embed.set_author(name=str(after), icon_url=after.display_avatar.url)
+                        embed.set_footer(text=f"ID: {after.id}")
+                        
+                        if timeout_until:
+                            duration = timeout_until - discord.utils.utcnow()
+                            minutes = int(duration.total_seconds() // 60)
+                            embed.add_field(
+                                name="⏰ Expira em",
+                                value=f"{discord.utils.format_dt(timeout_until, 'R')} ({minutes} min)",
+                                inline=False
+                            )
+                        
+                        await log_channel.send(embed=embed)
+                
+                await self.log_api.send_log(
+                    guild_id=after.guild.id,
+                    log_type="member_timeout",
+                    user_id=None,  # Não sabemos quem aplicou
+                    target_id=after.id,
+                    data={
+                        "target_name": str(after),
+                        "action": "applied",
+                        "expires_at": timeout_until.isoformat() if timeout_until else None
+                    }
+                )
+            else:
+                # Timeout removido
+                if log_channel_id:
+                    log_channel = after.guild.get_channel(log_channel_id)
+                    if log_channel:
+                        embed = discord.Embed(
+                            title="🔊 Membro des-silenciado",
+                            description=f"{after.mention} não está mais em timeout",
+                            color=discord.Color.green(),
+                            timestamp=discord.utils.utcnow()
+                        )
+                        embed.set_author(name=str(after), icon_url=after.display_avatar.url)
+                        embed.set_footer(text=f"ID: {after.id}")
+                        
+                        await log_channel.send(embed=embed)
+                
+                await self.log_api.send_log(
+                    guild_id=after.guild.id,
+                    log_type="member_timeout",
+                    user_id=None,
+                    target_id=after.id,
+                    data={
+                        "target_name": str(after),
+                        "action": "removed"
+                    }
+                )
+    
+    # ═══════════════ BAN / UNBAN ═══════════════
+    
+    @commands.Cog.listener()
+    async def on_member_ban(self, guild: discord.Guild, user: discord.User | discord.Member):
+        """Log de membro banido"""
+        
+        log_channel_id = await self.get_log_channel(guild.id, "member_ban")
+        
+        if log_channel_id:
+            log_channel = guild.get_channel(log_channel_id)
+            if log_channel:
+                embed = discord.Embed(
+                    title="🔨 Membro banido",
+                    color=discord.Color.dark_red(),
+                    timestamp=discord.utils.utcnow()
+                )
+                embed.set_author(name=str(user), icon_url=user.display_avatar.url)
+                embed.set_footer(text=f"ID: {user.id}")
+                
+                embed.add_field(name="👤 Usuário", value=f"{user.mention}\n{user.name}", inline=True)
+                embed.add_field(name="🆔 ID", value=str(user.id), inline=True)
+                
+                await log_channel.send(embed=embed)
+        
+        await self.log_api.send_log(
+            guild_id=guild.id,
+            log_type="member_ban",
+            target_id=user.id,
+            data={
+                "target_name": str(user),
+                "target_avatar": str(user.display_avatar.url)
+            }
+        )
+    
+    @commands.Cog.listener()
+    async def on_member_unban(self, guild: discord.Guild, user: discord.User):
+        """Log de membro desbanido"""
+        
+        log_channel_id = await self.get_log_channel(guild.id, "member_unban")
+        
+        if log_channel_id:
+            log_channel = guild.get_channel(log_channel_id)
+            if log_channel:
+                embed = discord.Embed(
+                    title="🔓 Membro desbanido",
+                    color=discord.Color.green(),
+                    timestamp=discord.utils.utcnow()
+                )
+                embed.set_author(name=str(user), icon_url=user.display_avatar.url)
+                embed.set_footer(text=f"ID: {user.id}")
+                
+                embed.add_field(name="👤 Usuário", value=f"{user.name}", inline=True)
+                embed.add_field(name="🆔 ID", value=str(user.id), inline=True)
+                
+                await log_channel.send(embed=embed)
+        
+        await self.log_api.send_log(
+            guild_id=guild.id,
+            log_type="member_unban",
+            target_id=user.id,
+            data={
+                "target_name": str(user),
+                "target_avatar": str(user.display_avatar.url)
+            }
+        )
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(MemberLogs(bot))
