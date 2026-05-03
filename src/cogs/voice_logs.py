@@ -56,8 +56,8 @@ class VoiceLogs(commands.Cog):
             color=colors.get(action, discord.Color.blue()),
             timestamp=discord.utils.utcnow()
         )
-        embed.set_author(name=str(member), icon_url=member.display_avatar.url)
-        embed.set_footer(text=f"ID: {member.id}")
+        embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
+        embed.set_footer(text=f"ID: {member.id} | @{member.name}")
         
         return embed
     
@@ -110,7 +110,8 @@ class VoiceLogs(commands.Cog):
             user_id=member.id,
             channel_id=channel.id,
             data={
-                "user_name": str(member),
+                "user_name": member.name,
+                "display_name": member.display_name,
                 "user_avatar": str(member.display_avatar.url),
                 "channel_name": channel.name,
                 "channel_id": str(channel.id),
