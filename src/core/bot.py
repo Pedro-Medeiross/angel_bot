@@ -18,7 +18,8 @@ class MyBot(commands.Bot):
             'cogs.voice_logs',
             'cogs.sync',
             'cogs.stats',
-            "cogs.message_logs"
+            "cogs.message_logs",
+            "cogs.server_logs",
         ]
         
         for cog in cogs:
