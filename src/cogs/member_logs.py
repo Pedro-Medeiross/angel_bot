@@ -27,6 +27,16 @@ class MemberLogs(commands.Cog):
             print(f"❌ Erro ao consultar API: {e}")
         return None
     
+    async def get_moderator(self, guild: discord.Guild, target_id: int, action: discord.AuditLogAction) -> str | None:
+        """Busca o moderador no audit log"""
+        try:
+            async for entry in guild.audit_logs(limit=3, action=action):
+                if entry.target and entry.target.id == target_id:
+                    return str(entry.user)
+        except discord.Forbidden:
+            pass
+        return None
+    
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
         """Log de mudanças no membro (nickname, roles, timeout)"""
@@ -70,6 +80,13 @@ class MemberLogs(commands.Cog):
         if before.timed_out != after.timed_out:
             log_channel_id = await self.get_log_channel(after.guild.id, "member_timeout")
             
+            # Busca moderador no audit log
+            moderator = await self.get_moderator(
+                after.guild, 
+                after.id, 
+                discord.AuditLogAction.member_update
+            )
+            
             if after.timed_out:
                 # Timeout aplicado
                 timeout_until = after.communication_disabled_until
@@ -79,19 +96,20 @@ class MemberLogs(commands.Cog):
                     if log_channel:
                         embed = discord.Embed(
                             title="🔇 Membro silenciado (timeout)",
-                            description=f"{after.mention} foi silenciado",
                             color=discord.Color.red(),
                             timestamp=discord.utils.utcnow()
                         )
                         embed.set_author(name=str(after), icon_url=after.display_avatar.url)
                         embed.set_footer(text=f"ID: {after.id}")
                         
+                        embed.add_field(name="👤 Membro", value=after.mention, inline=True)
+                        if moderator:
+                            embed.add_field(name="🛡️ Moderador", value=moderator, inline=True)
+                        
                         if timeout_until:
-                            duration = timeout_until - discord.utils.utcnow()
-                            minutes = int(duration.total_seconds() // 60)
                             embed.add_field(
-                                name="⏰ Expira em",
-                                value=f"{discord.utils.format_dt(timeout_until, 'R')} ({minutes} min)",
+                                name="⏰ Expira",
+                                value=discord.utils.format_dt(timeout_until, 'R'),
                                 inline=False
                             )
                         
@@ -100,10 +118,11 @@ class MemberLogs(commands.Cog):
                 await self.log_api.send_log(
                     guild_id=after.guild.id,
                     log_type="member_timeout",
-                    user_id=None,  # Não sabemos quem aplicou
+                    user_id=None,
                     target_id=after.id,
                     data={
                         "target_name": str(after),
+                        "moderator_name": moderator,
                         "action": "applied",
                         "expires_at": timeout_until.isoformat() if timeout_until else None
                     }
@@ -115,12 +134,15 @@ class MemberLogs(commands.Cog):
                     if log_channel:
                         embed = discord.Embed(
                             title="🔊 Membro des-silenciado",
-                            description=f"{after.mention} não está mais em timeout",
                             color=discord.Color.green(),
                             timestamp=discord.utils.utcnow()
                         )
                         embed.set_author(name=str(after), icon_url=after.display_avatar.url)
                         embed.set_footer(text=f"ID: {after.id}")
+                        
+                        embed.add_field(name="👤 Membro", value=after.mention, inline=True)
+                        if moderator:
+                            embed.add_field(name="🛡️ Moderador", value=moderator, inline=True)
                         
                         await log_channel.send(embed=embed)
                 
@@ -131,6 +153,7 @@ class MemberLogs(commands.Cog):
                     target_id=after.id,
                     data={
                         "target_name": str(after),
+                        "moderator_name": moderator,
                         "action": "removed"
                     }
                 )
@@ -143,6 +166,18 @@ class MemberLogs(commands.Cog):
         
         log_channel_id = await self.get_log_channel(guild.id, "member_ban")
         
+        # Busca moderador e motivo no audit log
+        moderator = None
+        reason = None
+        try:
+            async for entry in guild.audit_logs(limit=3, action=discord.AuditLogAction.ban):
+                if entry.target and entry.target.id == user.id:
+                    moderator = str(entry.user)
+                    reason = entry.reason or "Nenhuma razão informada"
+                    break
+        except discord.Forbidden:
+            pass
+        
         if log_channel_id:
             log_channel = guild.get_channel(log_channel_id)
             if log_channel:
@@ -154,8 +189,11 @@ class MemberLogs(commands.Cog):
                 embed.set_author(name=str(user), icon_url=user.display_avatar.url)
                 embed.set_footer(text=f"ID: {user.id}")
                 
-                embed.add_field(name="👤 Usuário", value=f"{user.mention}\n{user.name}", inline=True)
-                embed.add_field(name="🆔 ID", value=str(user.id), inline=True)
+                embed.add_field(name="👤 Usuário", value=f"{user.name}", inline=True)
+                if moderator:
+                    embed.add_field(name="🛡️ Moderador", value=moderator, inline=True)
+                if reason:
+                    embed.add_field(name="📝 Motivo", value=reason, inline=False)
                 
                 await log_channel.send(embed=embed)
         
@@ -165,7 +203,9 @@ class MemberLogs(commands.Cog):
             target_id=user.id,
             data={
                 "target_name": str(user),
-                "target_avatar": str(user.display_avatar.url)
+                "target_avatar": str(user.display_avatar.url),
+                "moderator_name": moderator,
+                "reason": reason
             }
         )
     
@@ -174,6 +214,16 @@ class MemberLogs(commands.Cog):
         """Log de membro desbanido"""
         
         log_channel_id = await self.get_log_channel(guild.id, "member_unban")
+        
+        # Busca moderador no audit log
+        moderator = None
+        try:
+            async for entry in guild.audit_logs(limit=3, action=discord.AuditLogAction.unban):
+                if entry.target and entry.target.id == user.id:
+                    moderator = str(entry.user)
+                    break
+        except discord.Forbidden:
+            pass
         
         if log_channel_id:
             log_channel = guild.get_channel(log_channel_id)
@@ -187,7 +237,8 @@ class MemberLogs(commands.Cog):
                 embed.set_footer(text=f"ID: {user.id}")
                 
                 embed.add_field(name="👤 Usuário", value=f"{user.name}", inline=True)
-                embed.add_field(name="🆔 ID", value=str(user.id), inline=True)
+                if moderator:
+                    embed.add_field(name="🛡️ Moderador", value=moderator, inline=True)
                 
                 await log_channel.send(embed=embed)
         
@@ -197,7 +248,8 @@ class MemberLogs(commands.Cog):
             target_id=user.id,
             data={
                 "target_name": str(user),
-                "target_avatar": str(user.display_avatar.url)
+                "target_avatar": str(user.display_avatar.url),
+                "moderator_name": moderator
             }
         )
 
