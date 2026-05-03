@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from io import StringIO
 import aiohttp
 from src.core.config import config
 from src.utils.log_api import log_api
@@ -16,7 +17,6 @@ class MessageLogs(commands.Cog):
         self.log_api = log_api
     
     async def get_log_channel(self, guild_id: int, log_type: str) -> int | None:
-        """Pergunta pra API qual canal usar para esse tipo de log"""
         try:
             async with aiohttp.ClientSession(auth=self.auth) as session:
                 url = f"{self.api_url}/guilds/{guild_id}/log-channel/{log_type}"
@@ -26,8 +26,23 @@ class MessageLogs(commands.Cog):
                         return data.get("channel_id")
         except aiohttp.ClientError as e:
             print(f"❌ Erro ao consultar API: {e}")
-        
         return None
+    
+    def _format_whatsapp_style(self, messages: list[discord.Message]) -> str:
+        """Formata mensagens estilo WhatsApp export"""
+        lines = []
+        for msg in sorted(messages, key=lambda m: m.created_at):
+            timestamp = msg.created_at.strftime("%d/%m/%Y %H:%M")
+            author = msg.author.display_name or msg.author.name
+            content = msg.content or "*sem texto*"
+            
+            lines.append(f"[{timestamp}] {author} (@{msg.author.name}): {content}")
+            
+            if msg.attachments:
+                for att in msg.attachments:
+                    lines.append(f"  📎 {att.url}")
+        
+        return "\n".join(lines)
     
     @commands.Cog.listener()
     async def on_message_delete(self, message: discord.Message):
@@ -36,7 +51,6 @@ class MessageLogs(commands.Cog):
         if message.author.bot or not message.guild:
             return
         
-        # Verifica se é imagem
         has_image = any(
             a.content_type and "image" in a.content_type 
             for a in message.attachments
@@ -54,8 +68,8 @@ class MessageLogs(commands.Cog):
                     color=discord.Color.red(),
                     timestamp=discord.utils.utcnow()
                 )
-                embed.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
-                embed.set_footer(text=f"ID: {message.author.id}")
+                embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
+                embed.set_footer(text=f"ID: {message.author.id} | @{message.author.name}")
                 
                 if message.content:
                     embed.add_field(name="💬 Conteúdo", value=message.content[:1024], inline=False)
@@ -66,7 +80,6 @@ class MessageLogs(commands.Cog):
                 
                 await log_channel.send(embed=embed)
         
-        # Envia log pra API
         await self.log_api.send_log(
             guild_id=message.guild.id,
             log_type="message_delete",
@@ -75,8 +88,9 @@ class MessageLogs(commands.Cog):
             data={
                 "message_id": str(message.id),
                 "content": message.content,
-                "author_name": str(message.author),
-                "author_avatar": str(message.author.display_avatar.url),
+                "user_name": message.author.name,
+                "display_name": message.author.display_name,
+                "user_avatar": str(message.author.display_avatar.url),
                 "channel_name": message.channel.name,
                 "channel_id": str(message.channel.id),
                 "attachments": [a.url for a in message.attachments],
@@ -84,20 +98,20 @@ class MessageLogs(commands.Cog):
             }
         )
         
-        # 2️⃣ Se tinha imagem: image_delete
+        # 2️⃣ image_delete
         if has_image:
             image_channel_id = await self.get_log_channel(message.guild.id, "image_delete")
             
             if image_channel_id:
                 image_channel = message.guild.get_channel(image_channel_id)
-                if image_channel and image_channel != log_channel:  # Evita duplicar se for o mesmo canal
+                if image_channel and image_channel != log_channel:
                     embed = discord.Embed(
                         title="🖼️ Imagem deletada",
                         description=f"{message.author.mention} em {message.channel.mention}",
                         color=discord.Color.purple(),
                         timestamp=discord.utils.utcnow()
                     )
-                    embed.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
+                    embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
                     
                     for att in message.attachments:
                         if att.content_type and "image" in att.content_type:
@@ -106,7 +120,6 @@ class MessageLogs(commands.Cog):
                     
                     await image_channel.send(embed=embed)
             
-            # Envia log de imagem pra API
             await self.log_api.send_log(
                 guild_id=message.guild.id,
                 log_type="image_delete",
@@ -114,7 +127,8 @@ class MessageLogs(commands.Cog):
                 channel_id=message.channel.id,
                 data={
                     "message_id": str(message.id),
-                    "author_name": str(message.author),
+                    "user_name": message.author.name,
+                    "display_name": message.author.display_name,
                     "channel_name": message.channel.name,
                     "channel_id": str(message.channel.id),
                     "images": [a.url for a in message.attachments if a.content_type and "image" in a.content_type]
@@ -128,7 +142,6 @@ class MessageLogs(commands.Cog):
         if before.author.bot or not before.guild:
             return
         
-        # Ignora se o conteúdo não mudou (embed, link preview)
         if before.content == after.content:
             return
         
@@ -143,8 +156,8 @@ class MessageLogs(commands.Cog):
                     color=discord.Color.orange(),
                     timestamp=discord.utils.utcnow()
                 )
-                embed.set_author(name=str(before.author), icon_url=before.author.display_avatar.url)
-                embed.set_footer(text=f"ID: {before.author.id}")
+                embed.set_author(name=before.author.display_name, icon_url=before.author.display_avatar.url)
+                embed.set_footer(text=f"ID: {before.author.id} | @{before.author.name}")
                 
                 embed.add_field(name="❌ Antes", value=before.content[:1024] or "*vazio*", inline=False)
                 embed.add_field(name="✅ Depois", value=after.content[:1024] or "*vazio*", inline=False)
@@ -152,7 +165,6 @@ class MessageLogs(commands.Cog):
                 
                 await log_channel.send(embed=embed)
         
-        # Envia log pra API
         await self.log_api.send_log(
             guild_id=before.guild.id,
             log_type="message_edit",
@@ -162,14 +174,15 @@ class MessageLogs(commands.Cog):
                 "message_id": str(after.id),
                 "old_content": before.content,
                 "new_content": after.content,
-                "author_name": str(before.author),
-                "author_avatar": str(before.author.display_avatar.url),
+                "user_name": before.author.name,
+                "display_name": before.author.display_name,
+                "user_avatar": str(before.author.display_avatar.url),
                 "channel_name": before.channel.name,
                 "channel_id": str(before.channel.id),
                 "jump_url": after.jump_url
             }
         )
-        
+    
     @commands.Cog.listener()
     async def on_bulk_message_delete(self, messages: list[discord.Message]):
         """Log de mensagens deletadas em massa"""
@@ -188,6 +201,13 @@ class MessageLogs(commands.Cog):
         if log_channel_id:
             log_channel = guild.get_channel(log_channel_id)
             if log_channel:
+                # Cria arquivo .txt estilo WhatsApp
+                txt_content = self._format_whatsapp_style(messages)
+                txt_file = discord.File(
+                    StringIO(txt_content),
+                    filename=f"bulk_delete_{channel.name}_{discord.utils.utcnow().strftime('%Y%m%d_%H%M%S')}.txt"
+                )
+                
                 embed = discord.Embed(
                     title="🗑️ Mensagens deletadas em massa",
                     description=f"{len(messages)} mensagens em {channel.mention}",
@@ -195,25 +215,24 @@ class MessageLogs(commands.Cog):
                     timestamp=discord.utils.utcnow()
                 )
                 
-                # Lista as últimas 10 mensagens no embed
+                # Resumo no embed
                 msg_list = []
-                for msg in messages[:10]:
-                    author = str(msg.author)
+                for msg in messages[:5]:
+                    author = msg.author.display_name
                     content = msg.content[:50] + "..." if len(msg.content) > 50 else msg.content
                     msg_list.append(f"**{author}**: {content or '*sem texto*'}")
                 
                 embed.add_field(
-                    name="📝 Últimas mensagens",
+                    name="📝 Resumo",
                     value="\n".join(msg_list) or "*mensagens vazias*",
                     inline=False
                 )
                 
-                if len(messages) > 10:
-                    embed.set_footer(text=f"Mostrando 10 de {len(messages)} mensagens")
+                if len(messages) > 5:
+                    embed.set_footer(text=f"Mostrando 5 de {len(messages)} mensagens. Detalhes no arquivo.")
                 
-                await log_channel.send(embed=embed)
+                await log_channel.send(embed=embed, file=txt_file)
         
-        # Envia log pra API
         await self.log_api.send_log(
             guild_id=guild.id,
             log_type="bulk_message_delete",
@@ -225,9 +244,11 @@ class MessageLogs(commands.Cog):
                 "messages": [
                     {
                         "message_id": str(msg.id),
-                        "author_name": str(msg.author),
-                        "author_id": str(msg.author.id),
-                        "content": msg.content
+                        "user_name": msg.author.name,
+                        "display_name": msg.author.display_name,
+                        "content": msg.content,
+                        "attachments": [a.url for a in msg.attachments],
+                        "created_at": msg.created_at.isoformat()
                     }
                     for msg in messages
                 ]
