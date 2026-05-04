@@ -14,7 +14,6 @@ class EmojiLogs(commands.Cog):
         self.api_pass = config.API_PASS
         self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
         self.log_api = log_api
-        self._emoji_cache = {}  # guild_id: {emoji_id: emoji_name}
     
     async def get_log_channel(self, guild_id: int, log_type: str) -> int | None:
         try:
@@ -29,21 +28,13 @@ class EmojiLogs(commands.Cog):
         return None
     
     @commands.Cog.listener()
-    async def on_ready(self):
-        """Cache inicial de emojis"""
-        for guild in self.bot.guilds:
-            self._emoji_cache[guild.id] = {
-                str(emoji.id): emoji.name for emoji in guild.emojis
-            }
-    
-    @commands.Cog.listener()
     async def on_guild_emojis_update(self, guild: discord.Guild, before: list[discord.Emoji], after: list[discord.Emoji]):
         """Detecta criação, deleção e mudança de nome de emojis"""
         
         before_ids = {str(e.id): e for e in before}
         after_ids = {str(e.id): e for e in after}
         
-        # Emoji criado (está no after, não no before)
+        # Emoji criado
         for emoji_id, emoji in after_ids.items():
             if emoji_id not in before_ids:
                 log_channel_id = await self.get_log_channel(guild.id, "emoji_create")
@@ -75,7 +66,7 @@ class EmojiLogs(commands.Cog):
                     }
                 )
         
-        # Emoji deletado (está no before, não no after)
+        # Emoji deletado
         for emoji_id, emoji in before_ids.items():
             if emoji_id not in after_ids:
                 log_channel_id = await self.get_log_channel(guild.id, "emoji_delete")
@@ -105,7 +96,7 @@ class EmojiLogs(commands.Cog):
                     }
                 )
         
-        # Emoji renomeado (está em ambos, mas nome diferente)
+        # Emoji renomeado
         for emoji_id, emoji in after_ids.items():
             if emoji_id in before_ids:
                 old_emoji = before_ids[emoji_id]
