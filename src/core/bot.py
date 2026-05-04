@@ -24,6 +24,7 @@ class MyBot(commands.Bot):
             "cogs.invite_logs",
             "cogs.channel_logs",
             "cogs.role_logs",
+            "cogs.member_events",
         ]
         
         for cog in cogs:
