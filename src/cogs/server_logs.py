@@ -37,6 +37,8 @@ class ServerLogs(commands.Cog):
                 member = guild.get_member(after.id)
                 if not member:
                     continue
+                if member.bot:
+                    continue
                 
                 log_channel_id = await self.get_log_channel(guild.id, "avatar_update")
                 
@@ -78,6 +80,8 @@ class ServerLogs(commands.Cog):
             for guild in self.bot.guilds:
                 member = guild.get_member(after.id)
                 if not member:
+                    continue
+                if member.bot:
                     continue
                 
                 log_channel_id = await self.get_log_channel(guild.id, "nickname_change")
@@ -122,6 +126,8 @@ class ServerLogs(commands.Cog):
             for guild in self.bot.guilds:
                 member = guild.get_member(after.id)
                 if not member:
+                    continue
+                if member.bot:
                     continue
                 
                 log_channel_id = await self.get_log_channel(guild.id, "nickname_change")
