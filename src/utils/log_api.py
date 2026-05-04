@@ -36,6 +36,33 @@ class LogAPI:
         except aiohttp.ClientError as e:
             print(f"❌ Erro API log {log_type}: {e}")
             return None
+    
+    async def send_mod_log(
+        self,
+        guild_id: int,
+        log_type: str,
+        moderator: discord.Member,
+        target: discord.Member | discord.User,
+        reason: str = None,
+        duration: str = None,
+        **kwargs
+    ) -> dict | None:
+        """Envia log de comando moderativo"""
+        return await self.send_log(
+            guild_id=guild_id,
+            log_type="moderator_commands",
+            user_id=moderator.id,
+            target_id=target.id,
+            data={
+                "command": log_type,
+                "moderator_name": moderator.name,
+                "moderator_display_name": moderator.display_name,
+                "target_name": target.name,
+                "target_display_name": getattr(target, 'display_name', target.name),
+                "reason": reason or "Nenhuma razão informada",
+                "duration": duration,
+                **kwargs
+            }
+        )
 
-# Instância global
 log_api = LogAPI()
