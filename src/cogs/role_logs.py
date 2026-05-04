@@ -270,6 +270,90 @@ class RoleLogs(commands.Cog):
                 "permission_changes": changes.get("permissions", {})
             }
         )
+        
+    # ═══════════════ MEMBER ROLE ADD ═══════════════
+    
+    @commands.Cog.listener()
+    async def on_member_update(self, before: discord.Member, after: discord.Member):
+        """Detecta mudança de cargos no membro"""
+        
+        if before.roles == after.roles:
+            return
+        
+        added_roles = set(after.roles) - set(before.roles)
+        removed_roles = set(before.roles) - set(after.roles)
+        
+        # Cargo adicionado
+        for role in added_roles:
+            log_channel_id = await self.get_log_channel(after.guild.id, "member_role_add")
+            
+            if log_channel_id:
+                log_channel = after.guild.get_channel(log_channel_id)
+                if log_channel:
+                    embed = discord.Embed(
+                        title="👔 Cargo adicionado",
+                        description=f"Cargo adicionado a {after.mention}",
+                        color=discord.Color.green(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    embed.set_author(name=after.display_name, icon_url=after.display_avatar.url)
+                    embed.set_footer(text=f"ID: {after.id} | @{after.name}")
+                    
+                    embed.add_field(name="👤 Membro", value=after.mention, inline=True)
+                    embed.add_field(name="👔 Cargo", value=role.mention, inline=True)
+                    embed.add_field(name="🆔 Cargo ID", value=role.id, inline=True)
+                    
+                    await log_channel.send(embed=embed)
+            
+            await self.log_api.send_log(
+                guild_id=after.guild.id,
+                log_type="member_role_add",
+                target_id=after.id,
+                data={
+                    "user_name": after.name,
+                    "display_name": after.display_name,
+                    "user_avatar": str(after.display_avatar.url),
+                    "role_name": role.name,
+                    "role_id": str(role.id),
+                    "role_color": str(role.color)
+                }
+            )
+        
+        # Cargo removido
+        for role in removed_roles:
+            log_channel_id = await self.get_log_channel(after.guild.id, "member_role_remove")
+            
+            if log_channel_id:
+                log_channel = after.guild.get_channel(log_channel_id)
+                if log_channel:
+                    embed = discord.Embed(
+                        title="👔 Cargo removido",
+                        description=f"Cargo removido de {after.mention}",
+                        color=discord.Color.red(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    embed.set_author(name=after.display_name, icon_url=after.display_avatar.url)
+                    embed.set_footer(text=f"ID: {after.id} | @{after.name}")
+                    
+                    embed.add_field(name="👤 Membro", value=after.mention, inline=True)
+                    embed.add_field(name="👔 Cargo", value=role.name, inline=True)
+                    embed.add_field(name="🆔 Cargo ID", value=role.id, inline=True)
+                    
+                    await log_channel.send(embed=embed)
+            
+            await self.log_api.send_log(
+                guild_id=after.guild.id,
+                log_type="member_role_remove",
+                target_id=after.id,
+                data={
+                    "user_name": after.name,
+                    "display_name": after.display_name,
+                    "user_avatar": str(after.display_avatar.url),
+                    "role_name": role.name,
+                    "role_id": str(role.id),
+                    "role_color": str(role.color)
+                }
+            )   
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(RoleLogs(bot))
