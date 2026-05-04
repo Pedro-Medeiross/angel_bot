@@ -66,6 +66,7 @@ class ServerLogs(commands.Cog):
                     data={
                         "user_name": after.name,
                         "display_name": after.global_name,
+                        "user_avatar": str(after.display_avatar.url),
                         "type": "avatar",
                         "old_url": str(before.avatar.url) if before.avatar else None,
                         "new_url": str(after.avatar.url) if after.avatar else None
@@ -95,6 +96,7 @@ class ServerLogs(commands.Cog):
                         )
                         embed.set_author(name=after.display_name, icon_url=after.display_avatar.url)
                         embed.set_footer(text=f"ID: {after.id} | @{after.name}")
+                        embed.set_thumbnail(url=after.display_avatar.url)
                         
                         embed.add_field(name="❌ Antes", value=old_name, inline=True)
                         embed.add_field(name="✅ Depois", value=new_name, inline=True)
@@ -108,6 +110,7 @@ class ServerLogs(commands.Cog):
                     data={
                         "user_name": after.name,
                         "display_name": after.global_name,
+                        "user_avatar": str(after.display_avatar.url),
                         "type": "display_name",
                         "old_name": before.global_name or before.name,
                         "new_name": after.global_name or after.name
@@ -134,6 +137,7 @@ class ServerLogs(commands.Cog):
                         )
                         embed.set_author(name=after.display_name, icon_url=after.display_avatar.url)
                         embed.set_footer(text=f"ID: {after.id}")
+                        embed.set_thumbnail(url=after.display_avatar.url)
                         
                         embed.add_field(name="❌ Antes", value=f"@{before.name}", inline=True)
                         embed.add_field(name="✅ Depois", value=f"@{after.name}", inline=True)
@@ -147,6 +151,7 @@ class ServerLogs(commands.Cog):
                     data={
                         "user_name": after.name,
                         "display_name": after.global_name,
+                        "user_avatar": str(after.display_avatar.url),
                         "type": "username",
                         "old_name": before.name,
                         "new_name": after.name
