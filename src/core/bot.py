@@ -23,6 +23,7 @@ class MyBot(commands.Bot):
             "cogs.emoji_logs",
             "cogs.invite_logs",
             "cogs.channel_logs",
+            "cogs.role_logs",
         ]
         
         for cog in cogs:
