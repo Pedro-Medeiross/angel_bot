@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+import asyncio
 import aiohttp
 from src.core.config import config
 from src.utils.log_api import log_api
@@ -14,6 +15,8 @@ class ChannelLogs(commands.Cog):
         self.api_pass = config.API_PASS
         self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
         self.log_api = log_api
+        self._position_queue = {}
+        self._position_task = {}
     
     async def get_log_channel(self, guild_id: int, log_type: str) -> int | None:
         try:
@@ -28,7 +31,6 @@ class ChannelLogs(commands.Cog):
         return None
     
     def _channel_type_name(self, channel: discord.abc.GuildChannel) -> str:
-        """Retorna nome amigável do tipo de canal"""
         type_map = {
             discord.ChannelType.text: "Texto",
             discord.ChannelType.voice: "Voz",
@@ -129,6 +131,84 @@ class ChannelLogs(commands.Cog):
     async def on_guild_channel_update(self, before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
         """Log de canal editado"""
         
+        # Se mudou só a posição, agrupa
+        if before.position != after.position and before.name == after.name:
+            guild_id = after.guild.id
+            
+            if guild_id not in self._position_queue:
+                self._position_queue[guild_id] = {}
+            
+            self._position_queue[guild_id][after.id] = (before.position, after.position, after.name)
+            
+            if guild_id in self._position_task:
+                self._position_task[guild_id].cancel()
+            
+            self._position_task[guild_id] = asyncio.create_task(
+                self._flush_position_changes(after.guild)
+            )
+            return
+        
+        await self._log_single_channel_update(before, after)
+    
+    async def _flush_position_changes(self, guild: discord.Guild):
+        """Envia mudanças de posição agrupadas após 1 segundo"""
+        await asyncio.sleep(1)
+        
+        queue = self._position_queue.pop(guild.id, {})
+        if not queue:
+            return
+        
+        log_channel_id = await self.get_log_channel(guild.id, "channel_update")
+        if not log_channel_id:
+            return
+        
+        log_channel = guild.get_channel(log_channel_id)
+        if not log_channel:
+            return
+        
+        changes_list = []
+        for channel_id, (old_pos, new_pos, channel_name) in queue.items():
+            changes_list.append(f"**{channel_name}**: {old_pos} → {new_pos}")
+        
+        embed = discord.Embed(
+            title="🔢 Posições de canais atualizadas",
+            description=f"{len(changes_list)} canal(is) reordenado(s)",
+            color=discord.Color.orange(),
+            timestamp=discord.utils.utcnow()
+        )
+        
+        chunk = ""
+        for line in changes_list:
+            if len(chunk) + len(line) > 1024:
+                embed.add_field(name="📋 Mudanças", value=chunk, inline=False)
+                chunk = line + "\n"
+            else:
+                chunk += line + "\n"
+        if chunk:
+            embed.add_field(name="📋 Mudanças", value=chunk, inline=False)
+        
+        await log_channel.send(embed=embed)
+        
+        await self.log_api.send_log(
+            guild_id=guild.id,
+            log_type="channel_update",
+            data={
+                "type": "position_bulk",
+                "changes": [
+                    {
+                        "channel_id": str(channel_id),
+                        "channel_name": channel_name,
+                        "old_position": old_pos,
+                        "new_position": new_pos
+                    }
+                    for channel_id, (old_pos, new_pos, channel_name) in queue.items()
+                ]
+            }
+        )
+    
+    async def _log_single_channel_update(self, before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
+        """Log de canal editado (mudanças não-posição)"""
+        
         log_channel_id = await self.get_log_channel(after.guild.id, "channel_update")
         
         if not log_channel_id:
@@ -140,42 +220,28 @@ class ChannelLogs(commands.Cog):
         
         changes = {}
         
-        # Nome
         if before.name != after.name:
             changes["name"] = {"old": before.name, "new": after.name}
         
-        # Tópico (apenas canais de texto)
         if isinstance(before, discord.TextChannel) and isinstance(after, discord.TextChannel):
             if before.topic != after.topic:
                 changes["topic"] = {"old": before.topic, "new": after.topic}
-            
-            # Slowmode
             if before.slowmode_delay != after.slowmode_delay:
                 changes["slowmode"] = {"old": before.slowmode_delay, "new": after.slowmode_delay}
-            
-            # NSFW
             if before.nsfw != after.nsfw:
                 changes["nsfw"] = {"old": before.nsfw, "new": after.nsfw}
         
-        # Bitrate (apenas canais de voz)
         if isinstance(before, discord.VoiceChannel) and isinstance(after, discord.VoiceChannel):
             if before.bitrate != after.bitrate:
                 changes["bitrate"] = {"old": before.bitrate, "new": after.bitrate}
-            
             if before.user_limit != after.user_limit:
                 changes["user_limit"] = {"old": before.user_limit, "new": after.user_limit}
         
-        # Posição
-        if before.position != after.position:
-            changes["position"] = {"old": before.position, "new": after.position}
-        
-        # Categoria
         old_cat = before.category.name if hasattr(before, 'category') and before.category else None
         new_cat = after.category.name if hasattr(after, 'category') and after.category else None
         if old_cat != new_cat:
             changes["category"] = {"old": old_cat, "new": new_cat}
         
-        # Permissões (overwrites)
         before_overwrites = {str(target.id): overwrite for target, overwrite in before.overwrites.items()}
         after_overwrites = {str(target.id): overwrite for target, overwrite in after.overwrites.items()}
         if before_overwrites != after_overwrites:
@@ -184,7 +250,6 @@ class ChannelLogs(commands.Cog):
         if not changes:
             return
         
-        # Embed
         embed = discord.Embed(
             title="✏️ Canal editado",
             description=f"Canal {after.mention}",
@@ -200,7 +265,6 @@ class ChannelLogs(commands.Cog):
                 "nsfw": "🔞 NSFW",
                 "bitrate": "🎵 Bitrate",
                 "user_limit": "👥 Limite de usuários",
-                "position": "🔢 Posição",
                 "category": "📁 Categoria",
                 "permissions": "🔒 Permissões"
             }
