@@ -25,13 +25,13 @@ def create_app(bot):
     
     @app.middleware("http")
     async def verify_bot_auth(request: Request, call_next):
-        # Health check público
-        if request.url.path == "/health":
+        # Rotas públicas (sem auth)
+        public_paths = ["/health", "/docs", "/redoc", "/openapi.json"]
+        if request.url.path in public_paths or request.url.path.startswith("/docs"):
             return await call_next(request)
         
         auth = request.headers.get("Authorization", "")
         
-        # Formato: "Bearer user:pass"
         if not auth.startswith("Bearer "):
             logger.warning(f"Auth inválido: {auth[:20]}...")
             raise HTTPException(status_code=401, detail="Missing or invalid auth header")
