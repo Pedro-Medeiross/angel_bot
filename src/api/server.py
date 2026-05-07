@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+import secrets
 import uvicorn
 import asyncio
 import logging
@@ -22,12 +23,32 @@ def create_app(bot):
     
     app.state.bot = bot
     
-    # Health check público
+    @app.middleware("http")
+    async def verify_bot_auth(request: Request, call_next):
+        # Health check público
+        if request.url.path == "/health":
+            return await call_next(request)
+        
+        auth = request.headers.get("Authorization", "")
+        
+        # Formato: "Bearer user:pass"
+        if not auth.startswith("Bearer "):
+            logger.warning(f"Auth inválido: {auth[:20]}...")
+            raise HTTPException(status_code=401, detail="Missing or invalid auth header")
+        
+        token = auth.replace("Bearer ", "")
+        expected = f"{config.API_USER}:{config.API_PASS}"
+        
+        if not secrets.compare_digest(token, expected):
+            logger.warning("Credenciais inválidas")
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+        return await call_next(request)
+    
     @app.get("/health")
     async def health():
         return {"status": "ok", "service": "bot-events"}
     
-    # Registra rotas
     from .routes import events
     app.include_router(events.router, prefix="/events", tags=["Events"])
     
