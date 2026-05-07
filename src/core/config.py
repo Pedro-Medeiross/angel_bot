@@ -10,6 +10,7 @@ class Config:
     API_URL = os.getenv('API_URL')
     API_USER = os.getenv('API_USER')
     API_PASS = os.getenv('API_PASS')
+    BOT_PORT: str = os.getenv('BOT_PORT', '8002')
     
     
     if not TOKEN:

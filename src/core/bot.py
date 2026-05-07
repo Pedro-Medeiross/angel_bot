@@ -1,6 +1,9 @@
 import discord
 from discord.ext import commands
 from .config import config
+import logging
+
+logger = logging.getLogger(__name__)
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -25,6 +28,7 @@ class MyBot(commands.Bot):
             "cogs.channel_logs",
             "cogs.role_logs",
             "cogs.member_events",
+            "cogs.tickets",
         ]
         
         for cog in cogs:
@@ -38,6 +42,11 @@ class MyBot(commands.Bot):
                 self.tree.copy_global_to(guild=guild)
                 await self.tree.sync(guild=guild)
             print(f'🔄 Comandos slash sincronizados para: {config.GUILD_IDS}')
+            
+        # Inicia servidor de eventos
+        from src.api.server import start_api_server
+        start_api_server(self)
+        logger.info("🌐 Servidor de eventos iniciado na porta 8001")
     
     async def on_ready(self):
         print(f'✅ Bot conectado como {self.user}')
