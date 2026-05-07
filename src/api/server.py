@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import secrets
 import uvicorn
 import asyncio
 import logging
@@ -13,7 +12,6 @@ def create_app(bot):
     
     app = FastAPI(title="Bot Events Receiver", version="1.0.0")
     
-    # CORS
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -22,45 +20,9 @@ def create_app(bot):
         allow_headers=["*"],
     )
     
-    # Guarda referência do bot
     app.state.bot = bot
     
-    # Middleware de autenticação
-    @app.middleware("http")
-    async def verify_bot_auth(request: Request, call_next):
-        # Health check público
-        if request.url.path == "/health":
-            return await call_next(request)
-        
-        auth_header = request.headers.get("Authorization", "")
-        logger.debug(f"Auth header: {auth_header[:50]}...")
-        
-        # Aceita "Bearer user:pass" ou "Basic base64"
-        if auth_header.startswith("Bearer "):
-            token = auth_header.replace("Bearer ", "")
-            expected = f"{config.API_USER}:{config.API_PASS}"
-            
-            if not secrets.compare_digest(token, expected):
-                logger.warning(f"Bearer token inválido")
-                raise HTTPException(status_code=401, detail="Invalid credentials")
-        
-        elif auth_header.startswith("Basic "):
-            import base64
-            try:
-                decoded = base64.b64decode(auth_header.replace("Basic ", "")).decode()
-                user, passwd = decoded.split(":", 1)
-                if user != config.API_USER or passwd != config.API_PASS:
-                    raise HTTPException(status_code=401, detail="Invalid credentials")
-            except Exception:
-                raise HTTPException(status_code=401, detail="Invalid Basic auth")
-        
-        else:
-            logger.warning(f"Header inválido: {auth_header[:20]}")
-            raise HTTPException(status_code=401, detail="Missing auth")
-        
-        return await call_next(request)
-    
-    # Health check
+    # Health check público
     @app.get("/health")
     async def health():
         return {"status": "ok", "service": "bot-events"}
