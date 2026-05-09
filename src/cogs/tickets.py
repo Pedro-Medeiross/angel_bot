@@ -5,7 +5,6 @@ import aiohttp
 from typing import Optional
 import logging
 from src.core.config import config
-from src.utils.log_api import log_api
 
 logger = logging.getLogger(__name__)
 
@@ -60,22 +59,19 @@ class Tickets(commands.Cog):
         self.api_user = config.API_USER
         self.api_pass = config.API_PASS
         self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
-        self._panel_messages = {}  # panel_id: message_id cache local
+        self._panel_messages = {}
     
     async def _save_panel_message_id(self, guild_id: int, panel_id: str, message_id: int):
-        """Salva o message_id do painel na API"""
+        """Salva o message_id do painel na API via Basic Auth"""
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(auth=self.auth) as session:
                 url = f"{self.api_url}/guilds/{guild_id}/tickets/panels/{panel_id}"
-                headers = {
-                    "Authorization": f"Bearer {self.api_user}:{self.api_pass}"
-                }
-                async with session.put(url, json={"message_id": str(message_id)}, headers=headers) as resp:
+                async with session.put(url, json={"message_id": message_id}) as resp:
                     if resp.status == 200:
                         self._panel_messages[panel_id] = message_id
                         logger.info(f"💾 message_id salvo: panel={panel_id} msg={message_id}")
                     else:
-                        logger.error(f"❌ Erro ao salvar message_id: {resp.status} - {await resp.text()}")
+                        logger.error(f"❌ Erro ao salvar message_id: {resp.status}")
         except aiohttp.ClientError as e:
             logger.error(f"❌ Erro API ao salvar message_id: {e}")
     
@@ -91,12 +87,9 @@ class Tickets(commands.Cog):
                     del self._panel_messages[panel_id]
         
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(auth=self.auth) as session:
                 url = f"{self.api_url}/guilds/{guild.id}/tickets/panels/{panel_id}"
-                headers = {
-                    "Authorization": f"Bearer {self.api_user}:{self.api_pass}"
-                }
-                async with session.get(url, headers=headers) as resp:
+                async with session.get(url) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         msg_id = data.get("message_id")
@@ -130,6 +123,7 @@ class Tickets(commands.Cog):
             title=event.title,
             description=event.description or "Clique no botão abaixo para abrir um ticket.",
             color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow()
         )
         
         view = TicketView(
@@ -141,7 +135,6 @@ class Tickets(commands.Cog):
         message = await channel.send(embed=embed, view=view)
         logger.info(f"✅ Painel enviado: msg_id={message.id} channel={channel.id}")
         
-        # Salva message_id na API
         await self._save_panel_message_id(guild.id, event.panel_id, message.id)
     
     # ═══════════════ PANEL UPDATED ═══════════════
@@ -152,7 +145,6 @@ class Tickets(commands.Cog):
         
         logger.info(f"✏️ Atualizando painel: guild={guild.id} panel={event.panel_id}")
         
-        # Tenta encontrar a mensagem existente
         message = await self._get_panel_message(guild, event.panel_id, int(event.channel_id))
         
         embed = discord.Embed(
@@ -180,7 +172,7 @@ class Tickets(commands.Cog):
             if channel:
                 message = await channel.send(embed=embed, view=view)
                 await self._save_panel_message_id(guild.id, event.panel_id, message.id)
-                logger.info(f"✅ Novo painel criado (atualização): msg_id={message.id}")
+                logger.info(f"✅ Novo painel criado: msg_id={message.id}")
     
     # ═══════════════ PANEL DELETED ═══════════════
     
@@ -191,7 +183,6 @@ class Tickets(commands.Cog):
         logger.info(f"🗑️ Removendo painel: guild={guild.id} panel={panel_id}")
         
         if panel_id in self._panel_messages:
-            # Tenta encontrar a mensagem em algum canal
             for channel in guild.channels:
                 try:
                     message = await channel.fetch_message(self._panel_messages[panel_id])
@@ -244,26 +235,14 @@ class Tickets(commands.Cog):
     @commands.Cog.listener()
     async def on_ticket_closed(self, guild: discord.Guild, event):
         """Processa fechamento de ticket"""
-        
         logger.info(f"🔒 Ticket fechado: guild={guild.id} ticket={event.ticket_id}")
-        
-        # TODO: buscar channel_id do ticket na API para enviar embed no canal
-        logger.info(f"✅ Ticket {event.ticket_id} fechado")
     
     # ═══════════════ TICKET CLAIMED ═══════════════
     
     @commands.Cog.listener()
     async def on_ticket_claimed(self, guild: discord.Guild, event):
         """Notifica que um staff reivindicou o ticket"""
-        
         logger.info(f"👤 Ticket reivindicado: guild={guild.id} ticket={event.ticket_id}")
-        
-        staff = guild.get_member(int(event.staff_id))
-        if not staff:
-            return
-        
-        # TODO: buscar channel_id do ticket na API e enviar embed "atendido por"
-        logger.info(f"✅ {staff.display_name} está atendendo o ticket {event.ticket_id}")
     
     # ═══════════════ BOTÕES INTERATIVOS ═══════════════
     
@@ -278,9 +257,7 @@ class Tickets(commands.Cog):
         
         if custom_id.startswith("ticket_open_"):
             panel_id = custom_id.replace("ticket_open_", "")
-            logger.info(f"🎫 Usuário {interaction.user.id} solicitou ticket via painel {panel_id}")
             
-            # Chama API para criar ticket
             try:
                 async with aiohttp.ClientSession(auth=self.auth) as session:
                     url = f"{self.api_url}/guilds/{interaction.guild.id}/tickets/open"
@@ -296,10 +273,10 @@ class Tickets(commands.Cog):
                             )
                         else:
                             await interaction.response.send_message(
-                                f"❌ Erro ao abrir ticket: {resp.status}",
+                                f"❌ Erro ao abrir ticket.",
                                 ephemeral=True
                             )
-            except aiohttp.ClientError as e:
+            except aiohttp.ClientError:
                 await interaction.response.send_message(
                     "❌ Erro ao comunicar com o sistema de tickets.",
                     ephemeral=True
@@ -316,13 +293,11 @@ class Tickets(commands.Cog):
                     }) as resp:
                         if resp.status == 200:
                             await interaction.response.send_message(
-                                "🔒 Ticket fechado!",
-                                ephemeral=True
+                                "🔒 Ticket fechado!", ephemeral=True
                             )
                         else:
                             await interaction.response.send_message(
-                                f"❌ Erro ao fechar ticket: {resp.status}",
-                                ephemeral=True
+                                "❌ Erro ao fechar ticket.", ephemeral=True
                             )
             except aiohttp.ClientError:
                 await interaction.response.send_message(
@@ -341,13 +316,11 @@ class Tickets(commands.Cog):
                     }) as resp:
                         if resp.status == 200:
                             await interaction.response.send_message(
-                                "👤 Ticket reivindicado!",
-                                ephemeral=True
+                                "👤 Ticket reivindicado!", ephemeral=True
                             )
                         else:
                             await interaction.response.send_message(
-                                f"❌ Erro ao reivindicar ticket: {resp.status}",
-                                ephemeral=True
+                                "❌ Erro ao reivindicar ticket.", ephemeral=True
                             )
             except aiohttp.ClientError:
                 await interaction.response.send_message(
