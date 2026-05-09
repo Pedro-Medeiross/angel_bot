@@ -291,29 +291,76 @@ class Tickets(commands.Cog):
         if custom_id.startswith("ticket_open_"):
             panel_id = custom_id.replace("ticket_open_", "")
             
+            await interaction.response.defer(ephemeral=True)
+            
             try:
+                guild = interaction.guild
+                user = interaction.user
+                
+                # 1️⃣ Busca configuração do painel na API
                 async with aiohttp.ClientSession(auth=self.auth) as session:
-                    url = f"{self.api_url}/guilds/{interaction.guild.id}/tickets/open"
+                    url = f"{self.api_url}/guilds/{guild.id}/tickets/panels/{panel_id}"
+                    async with session.get(url) as resp:
+                        if resp.status != 200:
+                            await interaction.followup.send("❌ Painel não encontrado.", ephemeral=True)
+                            return
+                        panel_data = await resp.json()
+                
+                category_id = panel_data.get("category_id")
+                category = guild.get_channel(int(category_id)) if category_id else None
+                
+                # 2️⃣ Cria o canal do ticket
+                channel_name = f"ticket-{user.name}"
+                try:
+                    channel = await guild.create_text_channel(
+                        name=channel_name,
+                        category=category,
+                        topic=f"Ticket de {user.name} | Panel: {panel_id}",
+                        reason=f"Ticket aberto por {user.name}"
+                    )
+                except discord.Forbidden:
+                    await interaction.followup.send("❌ Não tenho permissão para criar canais.", ephemeral=True)
+                    return
+                
+                # 3️⃣ Registra na API
+                async with aiohttp.ClientSession(auth=self.auth) as session:
+                    url = f"{self.api_url}/guilds/{guild.id}/tickets/open"
                     async with session.post(url, json={
-                        "user_id": str(interaction.user.id),
+                        "user_id": str(user.id),
+                        "channel_id": str(channel.id),
                         "panel_id": panel_id
                     }) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            await interaction.response.send_message(
-                                f"🎫 Ticket aberto! <#{data.get('channel_id')}>",
+                            ticket_id = data.get("ticket_id")
+                            
+                            # 4️⃣ Envia mensagem de boas-vindas
+                            embed = discord.Embed(
+                                title="🎫 Ticket Aberto",
+                                description=f"Olá {user.mention}, um membro da equipe irá atendê-lo em breve.",
+                                color=discord.Color.green(),
+                                timestamp=discord.utils.utcnow()
+                            )
+                            embed.add_field(name="📝 Ticket ID", value=ticket_id, inline=True)
+                            embed.add_field(name="👤 Aberto por", value=user.mention, inline=True)
+                            embed.set_footer(text="Use os botões abaixo para gerenciar o ticket.")
+                            
+                            view = TicketControlView(ticket_id=ticket_id)
+                            await channel.send(embed=embed, view=view)
+                            
+                            await interaction.followup.send(
+                                f"🎫 Ticket aberto! {channel.mention}",
                                 ephemeral=True
                             )
+                            logger.info(f"✅ Ticket criado: {channel.id} ticket_id={ticket_id}")
                         else:
-                            await interaction.response.send_message(
-                                f"❌ Erro ao abrir ticket.",
-                                ephemeral=True
-                            )
-            except aiohttp.ClientError:
-                await interaction.response.send_message(
-                    "❌ Erro ao comunicar com o sistema de tickets.",
-                    ephemeral=True
-                )
+                            # Se falhar na API, deleta o canal
+                            await channel.delete()
+                            await interaction.followup.send("❌ Erro ao registrar ticket.", ephemeral=True)
+            
+            except aiohttp.ClientError as e:
+                await interaction.followup.send("❌ Erro ao comunicar com a API.", ephemeral=True)
+                logger.error(f"❌ Erro ticket_open: {e}")
         
         elif custom_id.startswith("ticket_close_"):
             ticket_id = custom_id.replace("ticket_close_", "")
