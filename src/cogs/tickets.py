@@ -190,17 +190,42 @@ class Tickets(commands.Cog):
         
         logger.info(f"🗑️ Removendo painel: guild={guild.id} panel={panel_id}")
         
-        if panel_id in self._panel_messages:
-            for channel in guild.channels:
-                try:
-                    message = await channel.fetch_message(self._panel_messages[panel_id])
-                    await message.delete()
-                    logger.info(f"✅ Mensagem do painel deletada: {panel_id}")
-                    break
-                except (discord.NotFound, discord.Forbidden, AttributeError):
-                    continue
-            
-            del self._panel_messages[panel_id]
+        message_id = self._panel_messages.pop(panel_id, None)
+        
+        # Se não tem no cache, busca na API
+        if not message_id:
+            try:
+                async with aiohttp.ClientSession(auth=self.auth) as session:
+                    url = f"{self.api_url}/guilds/{guild.id}/tickets/panels/{panel_id}"
+                    async with session.get(url) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            message_id = data.get("message_id")
+                            if message_id:
+                                message_id = int(message_id)
+            except aiohttp.ClientError as e:
+                logger.error(f"❌ Erro ao buscar painel para deletar: {e}")
+        
+        if not message_id:
+            logger.warning(f"⚠️ message_id não encontrado para o painel {panel_id}")
+            return
+        
+        # Procura a mensagem em todos os canais
+        for channel in guild.text_channels:
+            try:
+                message = await channel.fetch_message(message_id)
+                await message.delete()
+                logger.info(f"✅ Embed do painel removido: panel={panel_id} channel={channel.id}")
+                return
+            except discord.NotFound:
+                continue
+            except discord.Forbidden:
+                continue
+            except Exception as e:
+                logger.error(f"❌ Erro ao deletar mensagem no canal {channel.id}: {e}")
+                continue
+        
+        logger.warning(f"⚠️ Mensagem {message_id} não encontrada em nenhum canal")
     
     # ═══════════════ TICKET CREATED ═══════════════
     
