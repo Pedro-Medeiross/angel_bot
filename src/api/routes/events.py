@@ -8,15 +8,25 @@ router = APIRouter()
 
 # ═══════════════ SCHEMAS ═══════════════
 
-class PanelEvent(BaseModel):
+class PanelCreatedEvent(BaseModel):
     guild_id: int
     panel_id: str
     title: str
     description: Optional[str] = ""
     button_label: str
     button_color: str
+    channel_id: str
     category_id: Optional[str] = None
-    support_roles: List[str] = []
+
+class PanelUpdatedEvent(BaseModel):
+    guild_id: int
+    panel_id: str
+    title: str
+    description: Optional[str] = ""
+    button_label: str
+    button_color: str
+    channel_id: str
+    category_id: Optional[str] = None
     is_active: Optional[bool] = True
 
 class PanelDeletedEvent(BaseModel):
@@ -43,24 +53,21 @@ class TicketClaimedEvent(BaseModel):
 # ═══════════════ ROTAS ═══════════════
 
 @router.post("/panel/created")
-async def panel_created(event: PanelEvent, request: Request):
-    """API notificou que um painel de ticket foi criado"""
+async def panel_created(event: PanelCreatedEvent, request: Request):
     bot = request.app.state.bot
-    logger.info(f"📥 Evento panel/created: guild={event.guild_id} panel={event.panel_id}")
+    logger.info(f"📥 panel/created: guild={event.guild_id} panel={event.panel_id}")
     
     guild = bot.get_guild(event.guild_id)
     if not guild:
         raise HTTPException(status_code=404, detail="Guild not found")
     
-    # Dispara evento interno para a cog de tickets processar
     bot.dispatch("ticket_panel_created", guild, event)
     return {"status": "ok"}
 
 @router.post("/panel/updated")
-async def panel_updated(event: PanelEvent, request: Request):
-    """API notificou que um painel foi atualizado"""
+async def panel_updated(event: PanelUpdatedEvent, request: Request):
     bot = request.app.state.bot
-    logger.info(f"📥 Evento panel/updated: guild={event.guild_id} panel={event.panel_id}")
+    logger.info(f"📥 panel/updated: guild={event.guild_id} panel={event.panel_id}")
     
     guild = bot.get_guild(event.guild_id)
     if not guild:
@@ -71,9 +78,8 @@ async def panel_updated(event: PanelEvent, request: Request):
 
 @router.post("/panel/deleted")
 async def panel_deleted(event: PanelDeletedEvent, request: Request):
-    """API notificou que um painel foi deletado"""
     bot = request.app.state.bot
-    logger.info(f"📥 Evento panel/deleted: guild={event.guild_id} panel={event.panel_id}")
+    logger.info(f"📥 panel/deleted: guild={event.guild_id} panel={event.panel_id}")
     
     guild = bot.get_guild(event.guild_id)
     if not guild:
@@ -84,9 +90,8 @@ async def panel_deleted(event: PanelDeletedEvent, request: Request):
 
 @router.post("/ticket/created")
 async def ticket_created(event: TicketCreatedEvent, request: Request):
-    """API notificou que um ticket foi aberto"""
     bot = request.app.state.bot
-    logger.info(f"📥 Evento ticket/created: guild={event.guild_id} ticket={event.ticket_id}")
+    logger.info(f"📥 ticket/created: guild={event.guild_id} ticket={event.ticket_id}")
     
     guild = bot.get_guild(event.guild_id)
     if not guild:
@@ -97,9 +102,8 @@ async def ticket_created(event: TicketCreatedEvent, request: Request):
 
 @router.post("/ticket/closed")
 async def ticket_closed(event: TicketClosedEvent, request: Request):
-    """API notificou que um ticket foi fechado"""
     bot = request.app.state.bot
-    logger.info(f"📥 Evento ticket/closed: guild={event.guild_id} ticket={event.ticket_id}")
+    logger.info(f"📥 ticket/closed: guild={event.guild_id} ticket={event.ticket_id}")
     
     guild = bot.get_guild(event.guild_id)
     if not guild:
@@ -110,9 +114,8 @@ async def ticket_closed(event: TicketClosedEvent, request: Request):
 
 @router.post("/ticket/claimed")
 async def ticket_claimed(event: TicketClaimedEvent, request: Request):
-    """API notificou que um ticket foi reinvindicado"""
     bot = request.app.state.bot
-    logger.info(f"📥 Evento ticket/claimed: guild={event.guild_id} ticket={event.ticket_id}")
+    logger.info(f"📥 ticket/claimed: guild={event.guild_id} ticket={event.ticket_id}")
     
     guild = bot.get_guild(event.guild_id)
     if not guild:

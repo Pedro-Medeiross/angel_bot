@@ -1,8 +1,11 @@
 import discord
 from discord.ext import commands
 from discord.ui import View, Button
-from typing import Optional, List
+import aiohttp
+from typing import Optional
 import logging
+from src.core.config import config
+from src.utils.log_api import log_api
 
 logger = logging.getLogger(__name__)
 
@@ -27,35 +30,92 @@ class TicketView(View):
             custom_id=f"ticket_open_{panel_id}",
             emoji="🎫"
         ))
+
+class TicketControlView(View):
+    """Botões de controle do ticket (staff)"""
     
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Aqui a API valida se o usuário pode abrir ticket
-        # Por enquanto, permite todos
-        return True
+    def __init__(self, ticket_id: str):
+        super().__init__(timeout=None)
+        
+        self.add_item(Button(
+            label="Fechar",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"ticket_close_{ticket_id}",
+            emoji="🔒"
+        ))
+        
+        self.add_item(Button(
+            label="Atender",
+            style=discord.ButtonStyle.success,
+            custom_id=f"ticket_claim_{ticket_id}",
+            emoji="👤"
+        ))
 
 class Tickets(commands.Cog):
     """Sistema de tickets"""
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.api_url = bot.config.API_URL if hasattr(bot, 'config') else None
+        self.api_url = config.API_URL
+        self.api_user = config.API_USER
+        self.api_pass = config.API_PASS
+        self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
+        self._panel_messages = {}  # panel_id: message_id cache local
+    
+    async def _save_panel_message_id(self, guild_id: int, panel_id: str, message_id: int):
+        """Salva o message_id do painel na API"""
+        try:
+            async with aiohttp.ClientSession(auth=self.auth) as session:
+                url = f"{self.api_url}/guilds/{guild_id}/tickets/panels/{panel_id}"
+                async with session.put(url, json={"message_id": str(message_id)}) as resp:
+                    if resp.status == 200:
+                        self._panel_messages[panel_id] = message_id
+                        logger.info(f"💾 message_id salvo: panel={panel_id} msg={message_id}")
+                    else:
+                        logger.error(f"❌ Erro ao salvar message_id: {resp.status}")
+        except aiohttp.ClientError as e:
+            logger.error(f"❌ Erro API ao salvar message_id: {e}")
+    
+    async def _get_panel_message(self, guild: discord.Guild, panel_id: str, channel_id: int):
+        """Busca mensagem do painel (cache ou API)"""
+        
+        # Cache local
+        if panel_id in self._panel_messages:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                try:
+                    return await channel.fetch_message(self._panel_messages[panel_id])
+                except discord.NotFound:
+                    del self._panel_messages[panel_id]
+        
+        # Busca na API
+        try:
+            async with aiohttp.ClientSession(auth=self.auth) as session:
+                url = f"{self.api_url}/guilds/{guild.id}/tickets/panels/{panel_id}"
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        msg_id = data.get("message_id")
+                        if msg_id:
+                            self._panel_messages[panel_id] = int(msg_id)
+                            channel = guild.get_channel(channel_id)
+                            if channel:
+                                try:
+                                    return await channel.fetch_message(int(msg_id))
+                                except discord.NotFound:
+                                    pass
+        except aiohttp.ClientError as e:
+            logger.error(f"❌ Erro ao buscar painel: {e}")
+        
+        return None
     
     # ═══════════════ PANEL CREATED ═══════════════
     
     @commands.Cog.listener()
     async def on_ticket_panel_created(self, guild: discord.Guild, event):
-        """Cria embed do painel no Discord"""
+        """Cria embed do painel no Discord e salva message_id na API"""
         
-        # Busca o canal onde o painel deve ser enviado
-        # O channel_id deveria vir no evento, mas não está no schema atual
-        # Assumindo que o painel já tem um channel_id associado via API
-        
-        logger.info(f"🎨 Painel criado: guild={guild.id} panel={event.panel_id} '{event.title}'")
-        
-        # Se não tem channel_id no evento, não faz nada (API deve enviar)
-        if not hasattr(event, 'channel_id') or not event.channel_id:
-            logger.warning("Painel sem channel_id, ignorando criação do embed")
-            return
+        logger.info(f"🎨 Criando painel: guild={guild.id} panel={event.panel_id}")
         
         channel = guild.get_channel(int(event.channel_id))
         if not channel:
@@ -63,12 +123,12 @@ class Tickets(commands.Cog):
             return
         
         embed = discord.Embed(
-            title=event.title or "Abrir Ticket",
+            title=event.title,
             description=event.description or "Clique no botão abaixo para abrir um ticket.",
             color=discord.Color.blue(),
             timestamp=discord.utils.utcnow()
         )
-        embed.set_footer(text="Sistema de Tickets")
+        embed.set_footer(text=f"Panel ID: {event.panel_id}")
         
         view = TicketView(
             panel_id=event.panel_id,
@@ -77,41 +137,30 @@ class Tickets(commands.Cog):
         )
         
         message = await channel.send(embed=embed, view=view)
-        logger.info(f"✅ Embed do painel enviado: msg_id={message.id} channel={channel.id}")
+        logger.info(f"✅ Painel enviado: msg_id={message.id} channel={channel.id}")
         
-        # TODO: salvar message_id na API para futuras atualizações
+        # Salva message_id na API
+        await self._save_panel_message_id(guild.id, event.panel_id, message.id)
     
     # ═══════════════ PANEL UPDATED ═══════════════
     
     @commands.Cog.listener()
     async def on_ticket_panel_updated(self, guild: discord.Guild, event):
-        """Atualiza embed do painel"""
+        """Atualiza embed do painel existente"""
         
-        logger.info(f"✏️ Painel atualizado: guild={guild.id} panel={event.panel_id}")
+        logger.info(f"✏️ Atualizando painel: guild={guild.id} panel={event.panel_id}")
         
-        if not hasattr(event, 'message_id') or not hasattr(event, 'channel_id'):
-            logger.warning("Painel sem message_id ou channel_id")
-            return
-        
-        channel = guild.get_channel(int(event.channel_id))
-        if not channel:
-            return
-        
-        try:
-            message = await channel.fetch_message(int(event.message_id))
-        except discord.NotFound:
-            logger.error(f"Mensagem do painel não encontrada: {event.message_id}")
-            return
+        # Tenta encontrar a mensagem existente
+        message = await self._get_panel_message(guild, event.panel_id, int(event.channel_id))
         
         embed = discord.Embed(
-            title=event.title or "Abrir Ticket",
+            title=event.title,
             description=event.description or "Clique no botão abaixo para abrir um ticket.",
             color=discord.Color.blue(),
             timestamp=discord.utils.utcnow()
         )
-        embed.set_footer(text="Sistema de Tickets")
+        embed.set_footer(text=f"Panel ID: {event.panel_id}")
         
-        # Se desativado, remove botão
         if event.is_active is False:
             embed.description = "🚫 Este painel foi desativado."
             view = None
@@ -122,17 +171,36 @@ class Tickets(commands.Cog):
                 color=event.button_color or "blue"
             )
         
-        await message.edit(embed=embed, view=view)
-        logger.info(f"✅ Painel atualizado: msg_id={message.id}")
+        if message:
+            await message.edit(embed=embed, view=view)
+            logger.info(f"✅ Painel editado: msg_id={message.id}")
+        else:
+            channel = guild.get_channel(int(event.channel_id))
+            if channel:
+                message = await channel.send(embed=embed, view=view)
+                await self._save_panel_message_id(guild.id, event.panel_id, message.id)
+                logger.info(f"✅ Novo painel criado (atualização): msg_id={message.id}")
     
     # ═══════════════ PANEL DELETED ═══════════════
     
     @commands.Cog.listener()
     async def on_ticket_panel_deleted(self, guild: discord.Guild, panel_id: str):
-        """Remove/desativa painel"""
-        logger.info(f"🗑️ Painel deletado: guild={guild.id} panel={panel_id}")
-        # A API deve ter removido a mensagem ou enviado panel/updated com is_active=false antes
-        pass
+        """Remove mensagem do painel"""
+        
+        logger.info(f"🗑️ Removendo painel: guild={guild.id} panel={panel_id}")
+        
+        if panel_id in self._panel_messages:
+            # Tenta encontrar a mensagem em algum canal
+            for channel in guild.channels:
+                try:
+                    message = await channel.fetch_message(self._panel_messages[panel_id])
+                    await message.delete()
+                    logger.info(f"✅ Mensagem do painel deletada: {panel_id}")
+                    break
+                except (discord.NotFound, discord.Forbidden, AttributeError):
+                    continue
+            
+            del self._panel_messages[panel_id]
     
     # ═══════════════ TICKET CREATED ═══════════════
     
@@ -149,20 +217,22 @@ class Tickets(commands.Cog):
         
         user = guild.get_member(int(event.user_id))
         if not user:
-            user = await self.bot.fetch_user(int(event.user_id))
+            try:
+                user = await self.bot.fetch_user(int(event.user_id))
+            except:
+                user = None
         
-        # Embed de boas-vindas
         embed = discord.Embed(
             title="🎫 Ticket Aberto",
-            description=f"Olá {user.mention}, um membro da equipe irá atendê-lo em breve.",
+            description=f"Olá {user.mention if user else 'usuário'}, um membro da equipe irá atendê-lo em breve.",
             color=discord.Color.green(),
             timestamp=discord.utils.utcnow()
         )
         embed.add_field(name="📝 Ticket ID", value=event.ticket_id, inline=True)
-        embed.add_field(name="👤 Aberto por", value=user.mention, inline=True)
-        embed.set_footer(text="Para fechar, um staff usará o comando de fechar ticket.")
+        if user:
+            embed.add_field(name="👤 Aberto por", value=user.mention, inline=True)
+        embed.set_footer(text="Use os botões abaixo para gerenciar o ticket.")
         
-        # Botões de controle (staff)
         view = TicketControlView(ticket_id=event.ticket_id)
         
         await channel.send(embed=embed, view=view)
@@ -176,26 +246,8 @@ class Tickets(commands.Cog):
         
         logger.info(f"🔒 Ticket fechado: guild={guild.id} ticket={event.ticket_id}")
         
-        # O canal deve ser deletado ou arquivado pela API
-        # Aqui só notificamos se necessário
-        
-        if hasattr(event, 'channel_id') and event.channel_id:
-            channel = guild.get_channel(int(event.channel_id))
-            if channel:
-                closed_by = guild.get_member(int(event.closed_by)) if event.closed_by else None
-                closer_name = closed_by.mention if closed_by else "Sistema"
-                
-                embed = discord.Embed(
-                    title="🔒 Ticket Fechado",
-                    description=f"Este ticket foi fechado por {closer_name}.",
-                    color=discord.Color.red(),
-                    timestamp=discord.utils.utcnow()
-                )
-                if event.reason:
-                    embed.add_field(name="📝 Motivo", value=event.reason, inline=False)
-                
-                await channel.send(embed=embed)
-                logger.info(f"✅ Mensagem de fechamento enviada")
+        # TODO: buscar channel_id do ticket na API para enviar embed no canal
+        logger.info(f"✅ Ticket {event.ticket_id} fechado")
     
     # ═══════════════ TICKET CLAIMED ═══════════════
     
@@ -205,19 +257,18 @@ class Tickets(commands.Cog):
         
         logger.info(f"👤 Ticket reivindicado: guild={guild.id} ticket={event.ticket_id}")
         
-        # O channel_id deveria vir no evento
         staff = guild.get_member(int(event.staff_id))
         if not staff:
             return
         
-        # TODO: buscar channel_id do ticket na API ou ter no evento
+        # TODO: buscar channel_id do ticket na API e enviar embed "atendido por"
         logger.info(f"✅ {staff.display_name} está atendendo o ticket {event.ticket_id}")
     
-    # ═══════════════ BOTÃO DE ABRIR TICKET ═══════════════
+    # ═══════════════ BOTÕES INTERATIVOS ═══════════════
     
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):
-        """Processa clique no botão de abrir ticket"""
+        """Processa cliques nos botões"""
         
         if not interaction.data or "custom_id" not in interaction.data:
             return
@@ -226,51 +277,82 @@ class Tickets(commands.Cog):
         
         if custom_id.startswith("ticket_open_"):
             panel_id = custom_id.replace("ticket_open_", "")
-            logger.info(f"🎫 Usuário {interaction.user.id} solicitou abertura de ticket via painel {panel_id}")
+            logger.info(f"🎫 Usuário {interaction.user.id} solicitou ticket via painel {panel_id}")
             
-            # Notifica API para criar o ticket
-            # A API vai criar o canal e notificar o bot de volta via ticket/created
-            # Por enquanto, responde ao usuário
-            await interaction.response.send_message(
-                "🎫 Sua solicitação de ticket foi enviada! Aguarde...",
-                ephemeral=True
-            )
+            # Chama API para criar ticket
+            try:
+                async with aiohttp.ClientSession(auth=self.auth) as session:
+                    url = f"{self.api_url}/guilds/{interaction.guild.id}/tickets/open"
+                    async with session.post(url, json={
+                        "user_id": str(interaction.user.id),
+                        "panel_id": panel_id
+                    }) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            await interaction.response.send_message(
+                                f"🎫 Ticket aberto! <#{data.get('channel_id')}>",
+                                ephemeral=True
+                            )
+                        else:
+                            await interaction.response.send_message(
+                                f"❌ Erro ao abrir ticket: {resp.status}",
+                                ephemeral=True
+                            )
+            except aiohttp.ClientError as e:
+                await interaction.response.send_message(
+                    "❌ Erro ao comunicar com o sistema de tickets.",
+                    ephemeral=True
+                )
         
         elif custom_id.startswith("ticket_close_"):
             ticket_id = custom_id.replace("ticket_close_", "")
-            await interaction.response.send_message(
-                f"🔒 Solicitação de fechamento do ticket {ticket_id} enviada.",
-                ephemeral=True
-            )
+            
+            try:
+                async with aiohttp.ClientSession(auth=self.auth) as session:
+                    url = f"{self.api_url}/guilds/{interaction.guild.id}/tickets/{ticket_id}/close"
+                    async with session.post(url, json={
+                        "closed_by": str(interaction.user.id)
+                    }) as resp:
+                        if resp.status == 200:
+                            await interaction.response.send_message(
+                                "🔒 Ticket fechado!",
+                                ephemeral=True
+                            )
+                        else:
+                            await interaction.response.send_message(
+                                f"❌ Erro ao fechar ticket: {resp.status}",
+                                ephemeral=True
+                            )
+            except aiohttp.ClientError:
+                await interaction.response.send_message(
+                    "❌ Erro ao comunicar com o sistema de tickets.",
+                    ephemeral=True
+                )
         
         elif custom_id.startswith("ticket_claim_"):
             ticket_id = custom_id.replace("ticket_claim_", "")
-            await interaction.response.send_message(
-                f"👤 Você reivindicou o ticket {ticket_id}.",
-                ephemeral=True
-            )
-
-
-class TicketControlView(View):
-    """Botões de controle do ticket (staff)"""
-    
-    def __init__(self, ticket_id: str):
-        super().__init__(timeout=None)
-        self.ticket_id = ticket_id
-        
-        self.add_item(Button(
-            label="Fechar",
-            style=discord.ButtonStyle.danger,
-            custom_id=f"ticket_close_{ticket_id}",
-            emoji="🔒"
-        ))
-        
-        self.add_item(Button(
-            label="Atender",
-            style=discord.ButtonStyle.success,
-            custom_id=f"ticket_claim_{ticket_id}",
-            emoji="👤"
-        ))
+            
+            try:
+                async with aiohttp.ClientSession(auth=self.auth) as session:
+                    url = f"{self.api_url}/guilds/{interaction.guild.id}/tickets/{ticket_id}/claim"
+                    async with session.put(url, json={
+                        "staff_id": str(interaction.user.id)
+                    }) as resp:
+                        if resp.status == 200:
+                            await interaction.response.send_message(
+                                "👤 Ticket reivindicado!",
+                                ephemeral=True
+                            )
+                        else:
+                            await interaction.response.send_message(
+                                f"❌ Erro ao reivindicar ticket: {resp.status}",
+                                ephemeral=True
+                            )
+            except aiohttp.ClientError:
+                await interaction.response.send_message(
+                    "❌ Erro ao comunicar com o sistema de tickets.",
+                    ephemeral=True
+                )
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Tickets(bot))
