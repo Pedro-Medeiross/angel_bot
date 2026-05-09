@@ -65,21 +65,23 @@ class Tickets(commands.Cog):
     async def _save_panel_message_id(self, guild_id: int, panel_id: str, message_id: int):
         """Salva o message_id do painel na API"""
         try:
-            async with aiohttp.ClientSession(auth=self.auth) as session:
+            async with aiohttp.ClientSession() as session:
                 url = f"{self.api_url}/guilds/{guild_id}/tickets/panels/{panel_id}"
-                async with session.put(url, json={"message_id": str(message_id)}) as resp:
+                headers = {
+                    "Authorization": f"Bearer {self.api_user}:{self.api_pass}"
+                }
+                async with session.put(url, json={"message_id": str(message_id)}, headers=headers) as resp:
                     if resp.status == 200:
                         self._panel_messages[panel_id] = message_id
                         logger.info(f"💾 message_id salvo: panel={panel_id} msg={message_id}")
                     else:
-                        logger.error(f"❌ Erro ao salvar message_id: {resp.status}")
+                        logger.error(f"❌ Erro ao salvar message_id: {resp.status} - {await resp.text()}")
         except aiohttp.ClientError as e:
             logger.error(f"❌ Erro API ao salvar message_id: {e}")
     
     async def _get_panel_message(self, guild: discord.Guild, panel_id: str, channel_id: int):
         """Busca mensagem do painel (cache ou API)"""
         
-        # Cache local
         if panel_id in self._panel_messages:
             channel = guild.get_channel(channel_id)
             if channel:
@@ -88,11 +90,13 @@ class Tickets(commands.Cog):
                 except discord.NotFound:
                     del self._panel_messages[panel_id]
         
-        # Busca na API
         try:
-            async with aiohttp.ClientSession(auth=self.auth) as session:
+            async with aiohttp.ClientSession() as session:
                 url = f"{self.api_url}/guilds/{guild.id}/tickets/panels/{panel_id}"
-                async with session.get(url) as resp:
+                headers = {
+                    "Authorization": f"Bearer {self.api_user}:{self.api_pass}"
+                }
+                async with session.get(url, headers=headers) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         msg_id = data.get("message_id")
