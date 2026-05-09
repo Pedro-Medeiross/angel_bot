@@ -67,21 +67,18 @@ class Tickets(commands.Cog):
         """Salva o message_id do painel na API via Basic Auth"""
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"{self.api_url}/guilds/{guild_id}/tickets/panels/{panel_id}"
-                
-                # Debug
-                logger.info(f"🔑 Tentando salvar com user={self.api_user[:5]}... url={url}")
+                url = f"{self.api_url}/guilds/{guild_id}/tickets/panels/{panel_id}/message"
                 
                 async with session.put(
                     url, 
                     json={"message_id": message_id},
                     auth=self.auth
                 ) as resp:
-                    body = await resp.text()
                     if resp.status == 200:
                         self._panel_messages[panel_id] = message_id
                         logger.info(f"💾 message_id salvo: panel={panel_id} msg={message_id}")
                     else:
+                        body = await resp.text()
                         logger.error(f"❌ Erro ao salvar message_id: {resp.status} - {body}")
         except aiohttp.ClientError as e:
             logger.error(f"❌ Erro API ao salvar message_id: {e}")
