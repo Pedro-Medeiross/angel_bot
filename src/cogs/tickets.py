@@ -126,7 +126,6 @@ class Tickets(commands.Cog):
             title=event.title,
             description=event.description or "Clique no botão abaixo para abrir um ticket.",
             color=discord.Color.blue(),
-            timestamp=discord.utils.utcnow()
         )
         
         view = TicketView(
