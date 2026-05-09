@@ -128,7 +128,6 @@ class Tickets(commands.Cog):
             color=discord.Color.blue(),
             timestamp=discord.utils.utcnow()
         )
-        embed.set_footer(text=f"Panel ID: {event.panel_id}")
         
         view = TicketView(
             panel_id=event.panel_id,
@@ -159,7 +158,6 @@ class Tickets(commands.Cog):
             color=discord.Color.blue(),
             timestamp=discord.utils.utcnow()
         )
-        embed.set_footer(text=f"Panel ID: {event.panel_id}")
         
         if event.is_active is False:
             embed.description = "🚫 Este painel foi desativado."
