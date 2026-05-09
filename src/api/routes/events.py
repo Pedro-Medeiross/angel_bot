@@ -64,17 +64,33 @@ class TicketClaimedEvent(BaseModel):
 
 @router.post("/panel/created")
 async def panel_created(request: Request):
-    """Recebe evento sem validação estrita"""
     data = await request.json()
-    logger.info(f"📥 panel/created: {data}")
+    logger.info(f"📥 panel/created FULL PAYLOAD: {json.dumps(data, indent=2)}")
     
     bot = request.app.state.bot
     guild = bot.get_guild(int(data["guild_id"]))
     if not guild:
         raise HTTPException(status_code=404, detail="Guild not found")
     
-    # Cria objeto compatível com o que a cog espera
-    event = PanelCreatedEvent(**data)
+    # Mapeia o campo correto (tenta channel_id, senão procura no payload)
+    channel_id = data.get("channel_id") or data.get("text_channel_id") or data.get("target_channel_id")
+    if not channel_id:
+        logger.error(f"❌ Não encontrei channel_id no payload: {list(data.keys())}")
+        raise HTTPException(status_code=400, detail="Missing channel_id")
+    
+    # Cria objeto com os dados
+    event_data = {
+        "guild_id": data["guild_id"],
+        "panel_id": data["panel_id"],
+        "title": data.get("title", ""),
+        "description": data.get("description", ""),
+        "button_label": data.get("button_label", "Abrir Ticket"),
+        "button_color": data.get("button_color", "blue"),
+        "channel_id": str(channel_id),
+        "category_id": str(data.get("category_id", "")) if data.get("category_id") else None,
+    }
+    
+    event = PanelCreatedEvent(**event_data)
     bot.dispatch("ticket_panel_created", guild, event)
     return {"status": "ok"}
 
