@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, ConfigDict, field_validator
+from typing import Optional, Union
 import logging
 
 logger = logging.getLogger(__name__)
@@ -9,46 +9,91 @@ router = APIRouter()
 # ═══════════════ SCHEMAS ═══════════════
 
 class PanelCreatedEvent(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    
     guild_id: int
     panel_id: str
     title: str
     description: Optional[str] = ""
     button_label: str
     button_color: str
-    channel_id: str
-    category_id: Optional[str] = None
+    channel_id: Union[str, int]
+    category_id: Optional[Union[str, int]] = None
+    support_roles: Optional[list] = None
+    
+    @field_validator('channel_id', mode='before')
+    @classmethod
+    def coerce_channel_id(cls, v):
+        return str(v)
+    
+    @field_validator('category_id', mode='before')
+    @classmethod
+    def coerce_category_id(cls, v):
+        return str(v) if v is not None else None
 
 class PanelUpdatedEvent(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    
     guild_id: int
     panel_id: str
     title: str
     description: Optional[str] = ""
     button_label: str
     button_color: str
-    channel_id: str
-    category_id: Optional[str] = None
+    channel_id: Union[str, int]
+    category_id: Optional[Union[str, int]] = None
+    support_roles: Optional[list] = None
     is_active: Optional[bool] = True
+    
+    @field_validator('channel_id', mode='before')
+    @classmethod
+    def coerce_channel_id(cls, v):
+        return str(v)
+    
+    @field_validator('category_id', mode='before')
+    @classmethod
+    def coerce_category_id(cls, v):
+        return str(v) if v is not None else None
 
 class PanelDeletedEvent(BaseModel):
+    model_config = ConfigDict(extra='allow')
     guild_id: int
     panel_id: str
 
 class TicketCreatedEvent(BaseModel):
+    model_config = ConfigDict(extra='allow')
     guild_id: int
     ticket_id: str
-    channel_id: str
-    user_id: str
+    channel_id: Union[str, int]
+    user_id: Union[str, int]
+    
+    @field_validator('channel_id', 'user_id', mode='before')
+    @classmethod
+    def coerce_to_str(cls, v):
+        return str(v)
 
 class TicketClosedEvent(BaseModel):
+    model_config = ConfigDict(extra='allow')
     guild_id: int
     ticket_id: str
-    closed_by: str
+    closed_by: Union[str, int]
     reason: Optional[str] = None
+    
+    @field_validator('closed_by', mode='before')
+    @classmethod
+    def coerce_closed_by(cls, v):
+        return str(v)
 
 class TicketClaimedEvent(BaseModel):
+    model_config = ConfigDict(extra='allow')
     guild_id: int
     ticket_id: str
-    staff_id: str
+    staff_id: Union[str, int]
+    
+    @field_validator('staff_id', mode='before')
+    @classmethod
+    def coerce_staff_id(cls, v):
+        return str(v)
 
 # ═══════════════ ROTAS ═══════════════
 
