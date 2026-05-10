@@ -213,7 +213,6 @@ class Tickets(commands.Cog):
                             title="🔒 Ticket Fechado",
                             description=f"Ticket fechado por {user.mention}",
                             color=discord.Color.red(),
-                            timestamp=discord.utils.utcnow()
                         )
                         embed.add_field(name="📝 Resolução", value=reason, inline=False)
                         
@@ -243,7 +242,6 @@ class Tickets(commands.Cog):
             title=event.title,
             description=event.description or "Clique no botão abaixo para abrir um ticket.",
             color=discord.Color.blue(),
-            timestamp=discord.utils.utcnow()
         )
         
         view = TicketView(
@@ -265,7 +263,6 @@ class Tickets(commands.Cog):
             title=event.title,
             description=event.description or "Clique no botão abaixo para abrir um ticket.",
             color=discord.Color.blue(),
-            timestamp=discord.utils.utcnow()
         )
         
         if event.is_active is False:
@@ -335,7 +332,6 @@ class Tickets(commands.Cog):
                         title="👤 Ticket Atendido",
                         description=f"{staff.mention} está atendendo este ticket.",
                         color=discord.Color.blue(),
-                        timestamp=discord.utils.utcnow()
                     )
                     await channel.send(embed=embed)
     
@@ -412,7 +408,6 @@ class Tickets(commands.Cog):
                                 title=f"🎫 Ticket #{ticket_count}",
                                 description=f"Olá {user.mention}, um membro da equipe irá atendê-lo em breve.",
                                 color=discord.Color.green(),
-                                timestamp=discord.utils.utcnow()
                             )
                             embed.add_field(name="📝 Ticket ID", value=ticket_id, inline=True)
                             embed.add_field(name="👤 Aberto por", value=user.mention, inline=True)
