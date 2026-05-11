@@ -334,7 +334,7 @@ class Tickets(commands.Cog):
         
         # 5️⃣ Envia transcript no canal configurado
         if transcript_url:
-            config_data = await self._api_get(f"/guilds/{guild.id}/tickets/config")
+            config_data = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
             transcript_channel_id = config_data.get("transcript_channel") if config_data else None
             
             if transcript_channel_id:
