@@ -255,15 +255,18 @@ class Tickets(commands.Cog):
         user = interaction.user
         
         result = await self._api_post(
-            f"/guilds/{guild.id}/tickets/{ticket_id}/close",
-            {"reason": reason}
+            f"/guilds/{guild.id}/tickets/{ticket_id}/bot/close",
+            {
+                "closed_by": str(user.id),
+                "reason": reason
+            }
         )
         
         if result:
             embed = discord.Embed(
                 title="🔒 Ticket Fechado",
                 description=f"Ticket fechado por {user.mention}",
-                color=discord.Color.red(),
+                color=discord.Color.red()
             )
             embed.add_field(name="📝 Resolução", value=reason, inline=False)
             
