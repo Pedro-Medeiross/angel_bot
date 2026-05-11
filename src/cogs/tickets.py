@@ -189,7 +189,7 @@ class Tickets(commands.Cog):
         return None
     
     async def _get_ticket_info(self, guild_id: int, ticket_id: str) -> Optional[dict]:
-        return await self._api_get(f"/guilds/{guild_id}/tickets/{ticket_id}")
+        return await self._api_get(f"/guilds/{guild_id}/tickets/bot/{ticket_id}")
     
     async def _check_can_close(self, interaction: discord.Interaction, ticket_info: dict) -> tuple[bool, str]:
         user = interaction.user
