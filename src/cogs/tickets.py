@@ -109,21 +109,63 @@ class Tickets(commands.Cog):
         self.api_pass = config.API_PASS
         self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
         self._panel_messages = {}
+        self._staff_roles_cache = {}
         
         logger.info(f"🔧 Tickets inicializado: api_url={self.api_url}")
     
     # ═══════════════ HELPERS ═══════════════
     
-    async def _save_panel_message_id(self, guild_id: int, panel_id: str, message_id: int):
+    async def _api_get(self, path: str) -> Optional[dict | list]:
+        """Faz GET na API com Basic Auth"""
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{self.api_url}/guilds/{guild_id}/tickets/panels/{panel_id}/message"
-                async with session.put(url, json={"message_id": message_id}, auth=self.auth) as resp:
+            async with aiohttp.ClientSession(auth=self.auth) as session:
+                async with session.get(f"{self.api_url}{path}") as resp:
                     if resp.status == 200:
-                        self._panel_messages[panel_id] = message_id
-                        logger.info(f"💾 message_id salvo: panel={panel_id} msg={message_id}")
+                        return await resp.json()
         except aiohttp.ClientError as e:
-            logger.error(f"❌ Erro ao salvar message_id: {e}")
+            logger.error(f"❌ API GET {path}: {e}")
+        return None
+    
+    async def _api_post(self, path: str, json: dict) -> Optional[dict]:
+        """Faz POST na API com Basic Auth"""
+        try:
+            async with aiohttp.ClientSession(auth=self.auth) as session:
+                async with session.post(f"{self.api_url}{path}", json=json) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+        except aiohttp.ClientError as e:
+            logger.error(f"❌ API POST {path}: {e}")
+        return None
+    
+    async def _api_put(self, path: str, json: dict) -> Optional[dict]:
+        """Faz PUT na API com Basic Auth"""
+        try:
+            async with aiohttp.ClientSession(auth=self.auth) as session:
+                async with session.put(f"{self.api_url}{path}", json=json) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+        except aiohttp.ClientError as e:
+            logger.error(f"❌ API PUT {path}: {e}")
+        return None
+    
+    async def _get_staff_roles(self, guild_id: int) -> list:
+        """Busca roles de staff, com cache"""
+        if guild_id in self._staff_roles_cache:
+            return self._staff_roles_cache[guild_id]
+        
+        data = await self._api_get(f"/guilds/{guild_id}/tickets/bot/staff-roles")
+        roles = data if isinstance(data, list) else []
+        self._staff_roles_cache[guild_id] = roles
+        return roles
+    
+    async def _save_panel_message_id(self, guild_id: int, panel_id: str, message_id: int):
+        result = await self._api_put(
+            f"/guilds/{guild_id}/tickets/panels/{panel_id}/message",
+            {"message_id": message_id}
+        )
+        if result:
+            self._panel_messages[panel_id] = message_id
+            logger.info(f"💾 message_id salvo: panel={panel_id} msg={message_id}")
     
     async def _get_panel_message(self, guild: discord.Guild, panel_id: str, channel_id: int):
         if panel_id in self._panel_messages:
@@ -134,65 +176,77 @@ class Tickets(commands.Cog):
                 except discord.NotFound:
                     del self._panel_messages[panel_id]
         
-        try:
-            async with aiohttp.ClientSession(auth=self.auth) as session:
-                url = f"{self.api_url}/guilds/{guild.id}/tickets/panels/{panel_id}"
-                async with session.get(url) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        msg_id = data.get("message_id")
-                        if msg_id:
-                            self._panel_messages[panel_id] = int(msg_id)
-                            channel = guild.get_channel(channel_id)
-                            if channel:
-                                try:
-                                    return await channel.fetch_message(int(msg_id))
-                                except discord.NotFound:
-                                    pass
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ Erro ao buscar painel: {e}")
+        data = await self._api_get(f"/guilds/{guild.id}/tickets/panels/{panel_id}")
+        if data and data.get("message_id"):
+            msg_id = int(data["message_id"])
+            self._panel_messages[panel_id] = msg_id
+            channel = guild.get_channel(channel_id)
+            if channel:
+                try:
+                    return await channel.fetch_message(msg_id)
+                except discord.NotFound:
+                    pass
         return None
     
     async def _get_ticket_info(self, guild_id: int, ticket_id: str) -> Optional[dict]:
-        """Busca informações do ticket na API"""
-        try:
-            async with aiohttp.ClientSession(auth=self.auth) as session:
-                url = f"{self.api_url}/guilds/{guild_id}/tickets/{ticket_id}"
-                async with session.get(url) as resp:
-                    if resp.status == 200:
-                        return await resp.json()
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ Erro ao buscar ticket: {e}")
-        return None
+        return await self._api_get(f"/guilds/{guild_id}/tickets/{ticket_id}")
     
     async def _check_can_close(self, interaction: discord.Interaction, ticket_info: dict) -> tuple[bool, str]:
-        """
-        Verifica se o usuário pode fechar o ticket.
-        Retorna (pode_fechar, motivo).
-        
-        Regras:
-        - Usuário que abriu: pode (com confirmação)
-        - Admin/Coordenador (administrator): pode sempre
-        - Staff: precisa ter claimado
-        - Outros: não pode
-        """
         user = interaction.user
-        guild = interaction.guild
         
-        # Admin do Discord sempre pode
         if user.guild_permissions.administrator:
             return True, "admin"
         
-        # Usuário que abriu o ticket
         if str(user.id) == str(ticket_info.get("user_id")):
             return True, "owner"
         
-        # Staff que claimou
         claimed_by = ticket_info.get("claimed_by")
         if claimed_by and str(user.id) == str(claimed_by):
             return True, "claimed"
         
         return False, "Você não tem permissão para fechar este ticket."
+    
+    async def _apply_ticket_permissions(self, channel: discord.TextChannel, guild: discord.Guild, user: discord.Member, claimed_by: str = None):
+        """Aplica permissões no canal do ticket"""
+        
+        staff_roles = await self._get_staff_roles(guild.id)
+        
+        base_perms = discord.PermissionOverwrite(
+            read_messages=True,
+            send_messages=True,
+            attach_files=True,
+            embed_links=True,
+            add_reactions=True,
+            read_message_history=True,
+            use_external_emojis=True,
+            use_external_stickers=True
+        )
+        
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            guild.me: discord.PermissionOverwrite(
+                read_messages=True, send_messages=True, manage_channels=True,
+                attach_files=True, embed_links=True, add_reactions=True
+            ),
+            user: base_perms
+        }
+        
+        if claimed_by:
+            claimed_member = guild.get_member(int(claimed_by))
+            if claimed_member:
+                overwrites[claimed_member] = base_perms
+        
+        for sr in staff_roles:
+            role = guild.get_role(int(sr["role_id"]))
+            if role and sr.get("can_view_all"):
+                overwrites[role] = base_perms
+        
+        for role in guild.roles:
+            if role.permissions.administrator and role.name != "@everyone":
+                overwrites[role] = base_perms
+        
+        await channel.edit(overwrites=overwrites)
+        logger.info(f"🔒 Permissões aplicadas em {channel.name}")
     
     async def _close_ticket(self, interaction: discord.Interaction, ticket_id: str, reason: str):
         """Executa o fechamento do ticket"""
@@ -200,32 +254,48 @@ class Tickets(commands.Cog):
         guild = interaction.guild
         user = interaction.user
         
-        try:
-            async with aiohttp.ClientSession(auth=self.auth) as session:
-                url = f"{self.api_url}/guilds/{guild.id}/tickets/{ticket_id}/close"
-                async with session.post(url, json={
-                    "closed_by": str(user.id),
-                    "reason": reason
-                }) as resp:
-                    if resp.status == 200:
-                        # Mensagem de fechamento
-                        embed = discord.Embed(
-                            title="🔒 Ticket Fechado",
-                            description=f"Ticket fechado por {user.mention}",
-                            color=discord.Color.red(),
-                        )
-                        embed.add_field(name="📝 Resolução", value=reason, inline=False)
-                        
-                        await interaction.channel.send(embed=embed)
-                        logger.info(f"🔒 Ticket fechado: {ticket_id} por {user.id}")
-                    else:
-                        await interaction.response.send_message(
-                            "❌ Erro ao fechar ticket na API.", ephemeral=True
-                        )
-        except aiohttp.ClientError:
-            await interaction.response.send_message(
-                "❌ Erro ao comunicar com a API.", ephemeral=True
+        result = await self._api_post(
+            f"/guilds/{guild.id}/tickets/{ticket_id}/close",
+            {"reason": reason}
+        )
+        
+        if result:
+            embed = discord.Embed(
+                title="🔒 Ticket Fechado",
+                description=f"Ticket fechado por {user.mention}",
+                color=discord.Color.red(),
             )
+            embed.add_field(name="📝 Resolução", value=reason, inline=False)
+            
+            await interaction.channel.send(embed=embed)
+            logger.info(f"🔒 Ticket fechado: {ticket_id} por {user.id}")
+    
+    # ═══════════════ REGISTRAR VIEWS NO STARTUP ═══════════════
+    
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Registra views persistentes dos tickets abertos após restart"""
+        if not self.bot.is_ready():
+            return
+        
+        total_registered = 0
+        for guild in self.bot.guilds:
+            try:
+                data = await self._api_get(f"/guilds/{guild.id}/tickets/bot/list?status=open&limit=500")
+                if not data:
+                    continue
+                
+                tickets = data.get("tickets", [])
+                for ticket in tickets:
+                    ticket_id = ticket.get("id")
+                    if ticket_id:
+                        self.bot.add_view(TicketControlView(ticket_id))
+                        total_registered += 1
+                        logger.info(f"🔄 View registrada: ticket={ticket_id} guild={guild.name}")
+            except Exception as e:
+                logger.error(f"❌ Erro ao registrar views em {guild.name}: {e}")
+        
+        logger.info(f"✅ {total_registered} views de tickets abertos registradas")
     
     # ═══════════════ PANEL EVENTS ═══════════════
     
@@ -235,7 +305,6 @@ class Tickets(commands.Cog):
         
         channel = guild.get_channel(int(event.channel_id))
         if not channel:
-            logger.error(f"Canal {event.channel_id} não encontrado")
             return
         
         embed = discord.Embed(
@@ -290,17 +359,9 @@ class Tickets(commands.Cog):
         message_id = self._panel_messages.pop(panel_id, None)
         
         if not message_id:
-            try:
-                async with aiohttp.ClientSession(auth=self.auth) as session:
-                    url = f"{self.api_url}/guilds/{guild.id}/tickets/panels/{panel_id}"
-                    async with session.get(url) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            message_id = data.get("message_id")
-                            if message_id:
-                                message_id = int(message_id)
-            except aiohttp.ClientError:
-                pass
+            data = await self._api_get(f"/guilds/{guild.id}/tickets/panels/{panel_id}")
+            if data and data.get("message_id"):
+                message_id = int(data["message_id"])
         
         if not message_id:
             return
@@ -318,22 +379,35 @@ class Tickets(commands.Cog):
     
     @commands.Cog.listener()
     async def on_ticket_claimed(self, guild: discord.Guild, event):
-        """Notifica no canal que um staff reivindicou o ticket"""
         logger.info(f"👤 Ticket reivindicado: guild={guild.id} ticket={event.ticket_id}")
         
-        # A API deve enviar channel_id junto
         channel_id = getattr(event, 'channel_id', None)
-        if channel_id:
-            channel = guild.get_channel(int(channel_id))
-            if channel:
-                staff = guild.get_member(int(event.staff_id))
-                if staff:
-                    embed = discord.Embed(
-                        title="👤 Ticket Atendido",
-                        description=f"{staff.mention} está atendendo este ticket.",
-                        color=discord.Color.blue(),
-                    )
-                    await channel.send(embed=embed)
+        if not channel_id:
+            return
+        
+        channel = guild.get_channel(int(channel_id))
+        if not channel:
+            return
+        
+        staff = guild.get_member(int(event.staff_id))
+        if not staff:
+            return
+        
+        ticket_info = await self._get_ticket_info(guild.id, event.ticket_id)
+        if ticket_info:
+            user = guild.get_member(int(ticket_info.get("user_id")))
+            if user:
+                await self._apply_ticket_permissions(
+                    channel, guild, user,
+                    claimed_by=str(event.staff_id)
+                )
+        
+        embed = discord.Embed(
+            title="👤 Ticket Atendido",
+            description=f"{staff.mention} está atendendo este ticket.",
+            color=discord.Color.blue(),
+        )
+        await channel.send(embed=embed)
     
     # ═══════════════ INTERACTIONS ═══════════════
     
@@ -344,7 +418,7 @@ class Tickets(commands.Cog):
         
         custom_id = interaction.data["custom_id"]
         
-        # ═══════════════ ABRIR TICKET ═══════════════
+        # ═════════ ABRIR TICKET ═════════
         
         if custom_id.startswith("ticket_open_"):
             panel_id = custom_id.replace("ticket_open_", "")
@@ -355,92 +429,77 @@ class Tickets(commands.Cog):
                 guild = interaction.guild
                 user = interaction.user
                 
-                # Busca config do painel
-                async with aiohttp.ClientSession(auth=self.auth) as session:
-                    url = f"{self.api_url}/guilds/{guild.id}/tickets/panels/{panel_id}"
-                    async with session.get(url) as resp:
-                        if resp.status != 200:
-                            await interaction.followup.send("❌ Painel não encontrado.", ephemeral=True)
-                            return
-                        panel_data = await resp.json()
+                panel_data = await self._api_get(f"/guilds/{guild.id}/tickets/panels/{panel_id}")
+                if not panel_data:
+                    await interaction.followup.send("❌ Painel não encontrado.", ephemeral=True)
+                    return
                 
-                # Busca o próximo número do ticket
-                async with aiohttp.ClientSession(auth=self.auth) as session:
-                    url = f"{self.api_url}/guilds/{guild.id}/tickets/config"
-                    async with session.get(url) as resp:
-                        if resp.status == 200:
-                            config_data = await resp.json()
-                            ticket_count = config_data.get("ticket_counter", 0) + 1
-                        else:
-                            ticket_count = 1
+                config_data = await self._api_get(f"/guilds/{guild.id}/tickets/config")
+                ticket_count = (config_data.get("ticket_counter", 0) + 1) if config_data else 1
                 
                 category_id = panel_data.get("category_id")
                 category = guild.get_channel(int(category_id)) if category_id else None
                 
-                # Nome do canal: ticket-0001-username
                 channel_name = f"ticket-{ticket_count:04d}-{user.name}"
                 
                 try:
                     channel = await guild.create_text_channel(
                         name=channel_name,
                         category=category,
-                        topic=f"Ticket #{ticket_count} de {user.name} | Panel: {panel_id}",
+                        topic=f"Ticket #{ticket_count} de {user.name}",
                         reason=f"Ticket aberto por {user.name}"
                     )
                 except discord.Forbidden:
                     await interaction.followup.send("❌ Não tenho permissão para criar canais.", ephemeral=True)
                     return
                 
-                # Registra na API
-                async with aiohttp.ClientSession(auth=self.auth) as session:
-                    url = f"{self.api_url}/guilds/{guild.id}/tickets/open"
-                    async with session.post(url, json={
-                        "user_id": str(user.id),
-                        "channel_id": str(channel.id),
-                        "panel_id": panel_id,
-                        "ticket_number": ticket_count
-                    }) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            ticket_id = data.get("ticket_id")
-                            
-                            embed = discord.Embed(
-                                title=f"🎫 Ticket #{ticket_count}",
-                                description=f"Olá {user.mention}, um membro da equipe irá atendê-lo em breve.",
-                                color=discord.Color.green(),
-                            )
-                            embed.add_field(name="📝 Ticket ID", value=ticket_id, inline=True)
-                            embed.add_field(name="👤 Aberto por", value=user.mention, inline=True)
-                            embed.set_footer(text="Use os botões abaixo para gerenciar o ticket.")
-                            
-                            view = TicketControlView(ticket_id=ticket_id)
-                            await channel.send(embed=embed, view=view)
-                            
-                            await interaction.followup.send(
-                                f"🎫 Ticket #{ticket_count} aberto! {channel.mention}",
-                                ephemeral=True
-                            )
-                            logger.info(f"✅ Ticket criado: {channel.id} ticket_id={ticket_id} número=#{ticket_count}")
-                        else:
-                            await channel.delete()
-                            await interaction.followup.send("❌ Erro ao registrar ticket.", ephemeral=True)
+                result = await self._api_post(f"/guilds/{guild.id}/tickets/open", {
+                    "user_id": str(user.id),
+                    "channel_id": str(channel.id),
+                    "panel_id": panel_id
+                })
+                
+                if not result:
+                    await channel.delete()
+                    await interaction.followup.send("❌ Erro ao registrar ticket.", ephemeral=True)
+                    return
+                
+                ticket_id = result.get("id")
+                
+                await self._apply_ticket_permissions(channel, guild, user)
+                
+                embed = discord.Embed(
+                    title=f"🎫 Ticket #{ticket_count}",
+                    description=f"Olá {user.mention}, um membro da equipe irá atendê-lo em breve.",
+                    color=discord.Color.green(),
+                )
+                embed.add_field(name="📝 Ticket ID", value=ticket_id, inline=True)
+                embed.add_field(name="👤 Aberto por", value=user.mention, inline=True)
+                embed.set_footer(text="Use os botões abaixo para gerenciar o ticket.")
+                
+                view = TicketControlView(ticket_id=ticket_id)
+                await channel.send(embed=embed, view=view)
+                
+                await interaction.followup.send(
+                    f"🎫 Ticket #{ticket_count} aberto! {channel.mention}",
+                    ephemeral=True
+                )
+                logger.info(f"✅ Ticket criado: {channel.id} ticket_id={ticket_id} número=#{ticket_count}")
             
             except aiohttp.ClientError as e:
                 await interaction.followup.send("❌ Erro ao comunicar com a API.", ephemeral=True)
                 logger.error(f"❌ Erro ticket_open: {e}")
         
-        # ═══════════════ FECHAR TICKET ═══════════════
+        # ═════════ FECHAR TICKET ═════════
         
         elif custom_id.startswith("ticket_close_"):
             ticket_id = custom_id.replace("ticket_close_", "")
             
-            # Busca info do ticket
             ticket_info = await self._get_ticket_info(interaction.guild.id, ticket_id)
             if not ticket_info:
                 await interaction.response.send_message("❌ Ticket não encontrado.", ephemeral=True)
                 return
             
-            # Verifica permissão
             can_close, role = await self._check_can_close(interaction, ticket_info)
             
             if not can_close:
@@ -448,7 +507,6 @@ class Tickets(commands.Cog):
                 return
             
             if role == "owner":
-                # Usuário que abriu: pede confirmação simples
                 view = ConfirmCloseView(ticket_id, self)
                 await interaction.response.send_message(
                     "⚠️ Tem certeza que deseja fechar este ticket?",
@@ -456,49 +514,33 @@ class Tickets(commands.Cog):
                     ephemeral=True
                 )
             else:
-                # Admin ou staff claimado: abre modal pedindo resolução
                 modal = CloseTicketModal(ticket_id, self)
                 await interaction.response.send_modal(modal)
         
-        # ═══════════════ CONFIRMAR FECHAMENTO (USUÁRIO) ═══════════════
+        # ═════════ CONFIRMAR FECHAMENTO ═════════
         
         elif custom_id.startswith("confirm_close_"):
             ticket_id = custom_id.replace("confirm_close_", "")
-            
-            # Abre modal pra pedir resolução
             modal = CloseTicketModal(ticket_id, self)
             await interaction.response.send_modal(modal)
         
         elif custom_id.startswith("cancel_close_"):
-            await interaction.response.edit_message(
-                content="❌ Fechamento cancelado.",
-                view=None
-            )
+            await interaction.response.edit_message(content="❌ Fechamento cancelado.", view=None)
         
-        # ═══════════════ CLAIM TICKET ═══════════════
+        # ═════════ CLAIM TICKET ═════════
         
         elif custom_id.startswith("ticket_claim_"):
             ticket_id = custom_id.replace("ticket_claim_", "")
             
-            try:
-                async with aiohttp.ClientSession(auth=self.auth) as session:
-                    url = f"{self.api_url}/guilds/{interaction.guild.id}/tickets/{ticket_id}/claim"
-                    async with session.put(url, json={
-                        "staff_id": str(interaction.user.id)
-                    }) as resp:
-                        if resp.status == 200:
-                            await interaction.response.send_message(
-                                "👤 Ticket reivindicado!", ephemeral=True
-                            )
-                        else:
-                            await interaction.response.send_message(
-                                "❌ Erro ao reivindicar ticket.", ephemeral=True
-                            )
-            except aiohttp.ClientError:
-                await interaction.response.send_message(
-                    "❌ Erro ao comunicar com o sistema de tickets.",
-                    ephemeral=True
-                )
+            result = await self._api_put(
+                f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/claim",
+                {"staff_id": str(interaction.user.id)}
+            )
+            
+            if result:
+                await interaction.response.send_message("👤 Ticket reivindicado!", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Erro ao reivindicar ticket.", ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Tickets(bot))
