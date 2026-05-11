@@ -6,6 +6,7 @@ import aiohttp
 from typing import Optional
 import logging
 from src.core.config import config
+from src.utils.transcript import generate_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -259,39 +260,115 @@ class Tickets(commands.Cog):
         user = interaction.user
         channel = interaction.channel
         
-        result = await self._api_post(
-            f"/guilds/{guild.id}/tickets/{ticket_id}/bot/close",
-            {
-                "closed_by": str(user.id),
-                "reason": reason
-            }
-        )
+        ticket_info = await self._get_ticket_info(guild.id, ticket_id)
+        opened_by_name = "Desconhecido"
+        opened_by_id = ""
+        opened_at = "Desconhecido"
+        ticket_number = ""
         
-        if result:
-            if role == "owner":
-                description = f"O usuário {user.mention} fechou este ticket."
-                title = "🔒 Ticket Fechado pelo Usuário"
-            else:
-                description = f"Ticket fechado por {user.mention}"
-                title = "🔒 Ticket Fechado"
-            
-            embed = discord.Embed(
-                title=title,
-                description=description,
-                color=discord.Color.red()
+        if ticket_info:
+            opener_id = ticket_info.get("user_id")
+            if opener_id:
+                opener = guild.get_member(int(opener_id))
+                if opener:
+                    opened_by_name = str(opener)
+                opened_by_id = str(opener_id)
+            opened_at = ticket_info.get("created_at", "Desconhecido")
+            ticket_number = str(ticket_info.get("ticket_number", ""))
+        
+        # 1️⃣ Gera transcript
+        transcript_url = None
+        try:
+            transcript_bytes = await generate_transcript(
+                channel=channel,
+                ticket_title=f"Ticket #{ticket_number}",
+                opened_by=opened_by_name,
+                opened_at=opened_at,
+                closed_by=str(user),
+                close_reason=reason
             )
             
-            if reason:
-                embed.add_field(name="📝 Resolução", value=reason, inline=False)
+            # 2️⃣ Upload pra API (só o arquivo)
+            form = aiohttp.FormData()
+            form.add_field(
+                "file",
+                transcript_bytes,
+                filename=f"ticket-{ticket_number}.png",
+                content_type="image/png"
+            )
             
-            await channel.send(embed=embed, delete_after=5)
-            await asyncio.sleep(5)
+            async with aiohttp.ClientSession(auth=self.auth) as session:
+                async with session.post(
+                    f"{self.api_url}/guilds/{guild.id}/tickets/{ticket_id}/transcript",
+                    data=form
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        transcript_url = data.get("url")
+                        logger.info(f"📸 Transcript enviado: {transcript_url}")
+        except Exception as e:
+            logger.error(f"❌ Erro ao gerar/enviar transcript: {e}")
+        
+        # 3️⃣ Fecha na API
+        await self._api_post(
+            f"/guilds/{guild.id}/tickets/{ticket_id}/bot/close",
+            {"closed_by": str(user.id), "reason": reason}
+        )
+        
+        # 4️⃣ Mensagem de fechamento no canal do ticket
+        if role == "owner":
+            title = "🔒 Ticket Fechado pelo Usuário"
+            description = f"O usuário {user.mention} fechou este ticket."
+        else:
+            title = "🔒 Ticket Fechado"
+            description = f"Ticket fechado por {user.mention}"
+        
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color.red()
+        )
+        embed.add_field(name="📝 Resolução", value=reason, inline=False)
+        
+        await channel.send(embed=embed, delete_after=5)
+        
+        # 5️⃣ Envia transcript no canal configurado
+        if transcript_url:
+            config_data = await self._api_get(f"/guilds/{guild.id}/tickets/config")
+            transcript_channel_id = config_data.get("transcript_channel") if config_data else None
             
-            try:
-                await channel.delete(reason=f"Ticket fechado por {user.name}")
-                logger.info(f"🗑️ Canal deletado: {channel.id} ticket={ticket_id}")
-            except discord.Forbidden:
-                logger.error(f"❌ Sem permissão para deletar canal: {channel.id}")
+            if transcript_channel_id:
+                transcript_channel = guild.get_channel(int(transcript_channel_id))
+                if transcript_channel:
+                    transcript_embed = discord.Embed(
+                        title="📋 Ticket Fechado",
+                        color=discord.Color.blue()
+                    )
+                    transcript_embed.add_field(name="📝 Nome do Ticket", value=f"ticket-{ticket_number}", inline=True)
+                    transcript_embed.add_field(name="👤 Autor do Ticket", value=f"<@{opened_by_id}>", inline=True)
+                    transcript_embed.add_field(name="🔒 Fechado por", value=user.mention, inline=True)
+                    transcript_embed.add_field(name="📅 Data de Abertura", value=opened_at, inline=True)
+                    transcript_embed.add_field(name="📅 Data de encerramento", value=discord.utils.utcnow().strftime("%d/%m/%Y %H:%M"), inline=True)
+                    transcript_embed.add_field(name="📝 Motivo", value=reason, inline=False)
+                    
+                    view = View()
+                    view.add_item(Button(
+                        label="Ver Transcrição",
+                        style=discord.ButtonStyle.link,
+                        url=transcript_url,
+                        emoji="📄"
+                    ))
+                    
+                    await transcript_channel.send(embed=transcript_embed, view=view)
+                    logger.info(f"📋 Transcript enviado em {transcript_channel.id}")
+        
+        # 6️⃣ Deleta o canal
+        await asyncio.sleep(5)
+        try:
+            await channel.delete(reason=f"Ticket fechado por {user.name}")
+            logger.info(f"🗑️ Canal deletado: {channel.id} ticket={ticket_id}")
+        except discord.Forbidden:
+            logger.error(f"❌ Sem permissão para deletar canal: {channel.id}")
     
     # ═══════════════ REGISTRAR VIEWS NO STARTUP ═══════════════
     
