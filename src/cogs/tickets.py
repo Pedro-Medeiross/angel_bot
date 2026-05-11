@@ -1,4 +1,5 @@
 import discord
+import asyncio
 from discord.ext import commands
 from discord.ui import View, Button, Modal, TextInput
 import aiohttp
@@ -70,7 +71,10 @@ class CloseTicketModal(Modal):
         self.add_item(self.reason)
     
     async def on_submit(self, interaction: discord.Interaction):
-        await self.cog._close_ticket(interaction, self.ticket_id, self.reason.value)
+        # Determina o role baseado em como chegou aqui
+        ticket_info = await self.cog._get_ticket_info(interaction.guild.id, self.ticket_id)
+        role = "owner" if ticket_info and str(interaction.user.id) == str(ticket_info.get("user_id")) else "claimed"
+        await self.cog._close_ticket(interaction, self.ticket_id, self.reason.value, role)
 
 class ConfirmCloseView(View):
     """View de confirmação para o usuário fechar o próprio ticket"""
@@ -248,11 +252,12 @@ class Tickets(commands.Cog):
         await channel.edit(overwrites=overwrites)
         logger.info(f"🔒 Permissões aplicadas em {channel.name}")
     
-    async def _close_ticket(self, interaction: discord.Interaction, ticket_id: str, reason: str):
+    async def _close_ticket(self, interaction: discord.Interaction, ticket_id: str, reason: str, role: str = "claimed"):
         """Executa o fechamento do ticket"""
         
         guild = interaction.guild
         user = interaction.user
+        channel = interaction.channel
         
         result = await self._api_post(
             f"/guilds/{guild.id}/tickets/{ticket_id}/bot/close",
@@ -263,15 +268,30 @@ class Tickets(commands.Cog):
         )
         
         if result:
+            if role == "owner":
+                description = f"O usuário {user.mention} fechou este ticket."
+                title = "🔒 Ticket Fechado pelo Usuário"
+            else:
+                description = f"Ticket fechado por {user.mention}"
+                title = "🔒 Ticket Fechado"
+            
             embed = discord.Embed(
-                title="🔒 Ticket Fechado",
-                description=f"Ticket fechado por {user.mention}",
+                title=title,
+                description=description,
                 color=discord.Color.red()
             )
-            embed.add_field(name="📝 Resolução", value=reason, inline=False)
             
-            await interaction.channel.send(embed=embed)
-            logger.info(f"🔒 Ticket fechado: {ticket_id} por {user.id}")
+            if reason:
+                embed.add_field(name="📝 Resolução", value=reason, inline=False)
+            
+            await channel.send(embed=embed, delete_after=5)
+            await asyncio.sleep(5)
+            
+            try:
+                await channel.delete(reason=f"Ticket fechado por {user.name}")
+                logger.info(f"🗑️ Canal deletado: {channel.id} ticket={ticket_id}")
+            except discord.Forbidden:
+                logger.error(f"❌ Sem permissão para deletar canal: {channel.id}")
     
     # ═══════════════ REGISTRAR VIEWS NO STARTUP ═══════════════
     
@@ -524,8 +544,9 @@ class Tickets(commands.Cog):
         
         elif custom_id.startswith("confirm_close_"):
             ticket_id = custom_id.replace("confirm_close_", "")
-            modal = CloseTicketModal(ticket_id, self)
-            await interaction.response.send_modal(modal)
+            # Desabilita a view de confirmação
+            await interaction.response.edit_message(content="✅ Fechando ticket...", view=None)
+            await self._close_ticket(interaction, ticket_id, "Fechado pelo usuário", role="owner")
         
         elif custom_id.startswith("cancel_close_"):
             await interaction.response.edit_message(content="❌ Fechamento cancelado.", view=None)
