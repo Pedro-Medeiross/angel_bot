@@ -453,6 +453,29 @@ class Tickets(commands.Cog):
         user = interaction.user
         channel = interaction.channel
         
+        # 1️⃣ BLOQUEIA IMEDIATAMENTE e envia mensagem
+        await channel.set_permissions(guild.default_role, send_messages=False)
+        for target, overwrite in channel.overwrites.items():
+            if isinstance(target, (discord.Member, discord.Role)) and overwrite.send_messages:
+                await channel.set_permissions(target, send_messages=False)
+        await channel.set_permissions(guild.me, send_messages=True)
+        
+        if role == "owner":
+            title = "🔒 Ticket Fechado pelo Usuário"
+            description = f"O usuário {user.mention} fechou este ticket."
+        else:
+            title = "🔒 Ticket Fechado"
+            description = f"Ticket fechado por {user.mention}"
+        
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color.red()
+        )
+        embed.add_field(name="📝 Resolução", value=reason, inline=False)
+        await channel.send(embed=embed)
+        
+        # 2️⃣ DEPOIS faz o resto (transcript, API, etc)
         ticket_info = await self._get_ticket_info(guild.id, ticket_id)
         opened_by_name = "Desconhecido"
         opened_by_id = ""
@@ -469,8 +492,8 @@ class Tickets(commands.Cog):
             opened_at = ticket_info.get("created_at", "Desconhecido")
             ticket_number = str(ticket_info.get("ticket_number", ""))
         
-        # 1️⃣ Gera transcript HTML
-        transcript_html = None
+        # Gera transcript
+        transcript_url = None
         try:
             messages_data = []
             async for message in channel.history(oldest_first=True, limit=500):
@@ -486,7 +509,7 @@ class Tickets(commands.Cog):
                     "content": message.content,
                     "attachments": [
                         {
-                            "url": a.url,           # URL direta do Discord (expira depois de um tempo)
+                            "url": a.url,
                             "filename": a.filename,
                             "content_type": a.content_type,
                             "size": a.size,
@@ -495,17 +518,10 @@ class Tickets(commands.Cog):
                         }
                         for a in message.attachments
                     ],
-                    "stickers": [
-                        {
-                            "name": s.name,
-                            "url": str(s.url)
-                        }
-                        for s in message.stickers
-                    ],
+                    "stickers": [{"name": s.name, "url": str(s.url)} for s in message.stickers],
                     "embeds": [
                         {
-                            "title": e.title,
-                            "description": e.description,
+                            "title": e.title, "description": e.description,
                             "url": e.url,
                             "image_url": str(e.image.url) if e.image else None,
                             "thumbnail_url": str(e.thumbnail.url) if e.thumbnail else None,
@@ -531,7 +547,6 @@ class Tickets(commands.Cog):
                 "messages": messages_data
             }
             
-            # 2️⃣ Envia transcript pra API como JSON
             async with aiohttp.ClientSession(auth=self.auth) as session:
                 async with session.post(
                     f"{self.api_url}/guilds/{guild.id}/tickets/{ticket_id}/transcript",
@@ -541,44 +556,16 @@ class Tickets(commands.Cog):
                         data = await resp.json()
                         transcript_url = data.get("url")
                         logger.info(f"📸 Transcript salvo: {transcript_url}")
-                    else:
-                        body = await resp.text()
-                        logger.error(f"❌ Erro ao salvar transcript: {resp.status} - {body}")
         except Exception as e:
             logger.error(f"❌ Erro ao gerar/enviar transcript: {e}")
         
-        # 3️⃣ Fecha na API
+        # Fecha na API
         await self._api_post(
             f"/guilds/{guild.id}/tickets/{ticket_id}/bot/close",
             {"closed_by": str(user.id), "reason": reason}
         )
         
-        # 4️⃣ Mensagem de fechamento no canal do ticket
-        if role == "owner":
-            title = "🔒 Ticket Fechado pelo Usuário"
-            description = f"O usuário {user.mention} fechou este ticket."
-        else:
-            title = "🔒 Ticket Fechado"
-            description = f"Ticket fechado por {user.mention}"
-
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=discord.Color.red()
-        )
-        embed.add_field(name="📝 Resolução", value=reason, inline=False)
-
-        # 🔒 Remove permissão de escrita de todos antes de enviar a mensagem
-        await channel.set_permissions(guild.default_role, send_messages=False)
-        for target, overwrite in channel.overwrites.items():
-            if isinstance(target, (discord.Member, discord.Role)) and overwrite.send_messages:
-                await channel.set_permissions(target, send_messages=False)
-
-        # Bot ainda pode enviar a mensagem final
-        await channel.set_permissions(guild.me, send_messages=True)
-        await channel.send(embed=embed, delete_after=5)
-        
-        # 5️⃣ Envia transcript no canal configurado
+        # Envia transcript no canal configurado
         if transcript_url:
             config_data = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
             transcript_channel_id = config_data.get("transcript_channel") if config_data else None
@@ -601,14 +588,14 @@ class Tickets(commands.Cog):
                     view.add_item(Button(
                         label="Ver Transcrição",
                         style=discord.ButtonStyle.link,
-                        url=transcript_url,  # URL do frontend: https://dashboard.../transcript/{id}
+                        url=transcript_url,
                         emoji="📄"
                     ))
                     
                     await transcript_channel.send(embed=transcript_embed, view=view)
                     logger.info(f"📋 Transcript enviado em {transcript_channel.id}")
         
-        # 6️⃣ Deleta o canal
+        # Deleta o canal
         await asyncio.sleep(5)
         try:
             await channel.delete(reason=f"Ticket fechado por {user.name}")
@@ -900,7 +887,7 @@ class Tickets(commands.Cog):
             user = interaction.guild.get_member(int(user_id)) if user_id else None
             
             if user:
-                await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
+                await interaction.channel.set_permissions(user, read_messages=True, send_messages=False)
                 
                 view = TicketControlView(ticket_id, chat_locked=True, claimed=True)
                 await interaction.message.edit(view=view)
