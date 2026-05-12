@@ -452,13 +452,28 @@ class Tickets(commands.Cog):
         user = interaction.user
         channel = interaction.channel
         
-        # 1️⃣ BLOQUEIA e envia mensagem IMEDIATAMENTE
-        await channel.set_permissions(guild.default_role, read_messages=False, send_messages=False)
-        # Só bloqueia send_messages, não mexe em read_messages dos outros
+        # 1️⃣ BLOQUEIA IMEDIATAMENTE - @everyone SEMPRE sem acesso
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False)
+        }
+
+        # Mantém permissões existentes de outros mas bloqueia send_messages
         for target, overwrite in channel.overwrites.items():
+            if target == guild.default_role:
+                continue  # Já tratado acima
             if isinstance(target, (discord.Member, discord.Role)):
-                await channel.set_permissions(target, send_messages=False)
-        await channel.set_permissions(guild.me, read_messages=True, send_messages=True)
+                # Mantém read_messages como está, só bloqueia send_messages
+                overwrites[target] = discord.PermissionOverwrite(
+                    read_messages=overwrite.read_messages if overwrite.read_messages is not None else None,
+                    send_messages=False
+                )
+
+        # Bot sempre tem acesso total
+        overwrites[guild.me] = discord.PermissionOverwrite(
+            read_messages=True, send_messages=True, manage_channels=True
+        )
+
+        await channel.edit(overwrites=overwrites)
 
         # Envia a mensagem AGORA
         if role == "owner":
