@@ -452,25 +452,23 @@ class Tickets(commands.Cog):
         user = interaction.user
         channel = interaction.channel
         
-        # 1️⃣ BLOQUEIA IMEDIATAMENTE e envia mensagem
-        await channel.set_permissions(guild.default_role, send_messages=False)
+        # 1️⃣ BLOQUEIA e envia mensagem IMEDIATAMENTE
+        await channel.set_permissions(guild.default_role, read_messages=False, send_messages=False)
+        # Só bloqueia send_messages, não mexe em read_messages dos outros
         for target, overwrite in channel.overwrites.items():
-            if isinstance(target, (discord.Member, discord.Role)) and overwrite.send_messages:
+            if isinstance(target, (discord.Member, discord.Role)):
                 await channel.set_permissions(target, send_messages=False)
-        await channel.set_permissions(guild.me, send_messages=True)
-        
+        await channel.set_permissions(guild.me, read_messages=True, send_messages=True)
+
+        # Envia a mensagem AGORA
         if role == "owner":
             title = "🔒 Ticket Fechado pelo Usuário"
             description = f"O usuário {user.mention} fechou este ticket."
         else:
             title = "🔒 Ticket Fechado"
             description = f"Ticket fechado por {user.mention}"
-        
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=discord.Color.red()
-        )
+
+        embed = discord.Embed(title=title, description=description, color=discord.Color.red())
         embed.add_field(name="📝 Resolução", value=reason, inline=False)
         await channel.send(embed=embed)
         
