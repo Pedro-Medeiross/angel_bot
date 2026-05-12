@@ -80,9 +80,8 @@ class TicketControlView(View):
         if interaction.user.guild_permissions.administrator:
             return True
         
-        cog = interaction.client.get_cog("Tickets")
-        if cog:
-            staff_roles = await cog._get_staff_roles(interaction.guild.id)
+        if self.cog:
+            staff_roles = await self.cog._get_staff_roles(interaction.guild.id)
             for sr in staff_roles:
                 role = interaction.guild.get_role(int(sr["role_id"]))
                 if role and role in interaction.user.roles:
@@ -621,8 +620,9 @@ class Tickets(commands.Cog):
                 tickets = data.get("tickets", [])
                 for ticket in tickets:
                     ticket_id = ticket.get("id")
+                    claimed_by = ticket.get("claimed_by")
                     if ticket_id:
-                        self.bot.add_view(TicketControlView(ticket_id))
+                        self.bot.add_view(TicketControlView(ticket_id, claimed=(claimed_by is not None)))
                         total_registered += 1
                         logger.info(f"🔄 View registrada: ticket={ticket_id} guild={guild.name}")
             except Exception as e:
@@ -803,104 +803,118 @@ class Tickets(commands.Cog):
         elif custom_id.startswith("cancel_close_"):
             await interaction.response.edit_message(content="❌ Fechamento cancelado.", view=None)
         
-        # ═════════ CLAIM TICKET ═════════
-        
-        elif custom_id.startswith("ticket_claim_"):
-            ticket_id = custom_id.replace("ticket_claim_", "")
-            
-            result = await self._api_put(
-                f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/claim",
-                {"staff_id": str(interaction.user.id)}
-            )
-            
-            if result:
-                # Libera o chat automaticamente ao claimar
-                ticket_info = await self._get_ticket_info(interaction.guild.id, ticket_id)
-                if ticket_info:
-                    user_id = ticket_info.get("user_id")
-                    user = interaction.guild.get_member(int(user_id)) if user_id else None
-                    if user:
-                        await self._apply_ticket_permissions(
-                            interaction.channel, interaction.guild, user,
-                            claimed_by=str(interaction.user.id))
-                        await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
-                        
-                        # Atualiza botão na mensagem original
-                        try:
-                            view = TicketControlView(ticket_id, chat_locked=False, claimed=True)
-                            await interaction.message.edit(view=view)
-                        except:
-                            pass
-                        
-                        embed = discord.Embed(
-                            title="👤 Ticket Atendido",
-                            description=f"{interaction.user.mention} está atendendo este ticket.\n🔓 Chat liberado automaticamente.",
-                            color=discord.Color.blue(),
-                        )
-                        await interaction.channel.send(embed=embed)
-                
-                await interaction.response.send_message("👤 Ticket reivindicado! Chat liberado.", ephemeral=True)
-            else:
-                await interaction.response.send_message("❌ Erro ao reivindicar ticket.", ephemeral=True)
-                
         # ═════════ LIBERAR CHAT ═════════
 
-        elif custom_id.startswith("ticket_unlock_"):
-            ticket_id = custom_id.replace("ticket_unlock_", "")
+        elif custom_id.startswith("ticket_unlock_") or custom_id.startswith("ticket_lock_") or custom_id.startswith("ticket_claim_"):
             
-            ticket_info = await self._get_ticket_info(interaction.guild.id, ticket_id)
-            if not ticket_info:
-                await interaction.response.send_message("❌ Ticket não encontrado.", ephemeral=True)
-                return
-            
-            user_id = ticket_info.get("user_id")
-            user = interaction.guild.get_member(int(user_id)) if user_id else None
-            
-            if user:
-                await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
+            # Verifica se é staff/admin primeiro
+            if not interaction.user.guild_permissions.administrator:
+                is_staff = False
+                staff_roles = await self._get_staff_roles(interaction.guild.id)
+                for sr in staff_roles:
+                    role = interaction.guild.get_role(int(sr["role_id"]))
+                    if role and role in interaction.user.roles:
+                        is_staff = True
+                        break
                 
-                # Atualiza a mensagem com o botão alternado
-                view = TicketControlView(ticket_id, chat_locked=False, claimed=True)
-                await interaction.message.edit(view=view)
+                if not is_staff:
+                    await interaction.response.send_message("❌ Apenas staff pode usar este botão.", ephemeral=True)
+                    return
+            
+            # ═════════ UNLOCK ═════════
+            if custom_id.startswith("ticket_unlock_"):
+                ticket_id = custom_id.replace("ticket_unlock_", "")
                 
-                embed = discord.Embed(
-                    title="🔓 Chat Liberado",
-                    description=f"O chat foi liberado por {interaction.user.mention}. O usuário já pode enviar mensagens.",
-                    color=discord.Color.blue(),
+                ticket_info = await self._get_ticket_info(interaction.guild.id, ticket_id)
+                if not ticket_info:
+                    await interaction.response.send_message("❌ Ticket não encontrado.", ephemeral=True)
+                    return
+                
+                is_claimed = ticket_info.get("claimed_by") is not None
+                
+                user_id = ticket_info.get("user_id")
+                user = interaction.guild.get_member(int(user_id)) if user_id else None
+                
+                if user:
+                    await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
+                    view = TicketControlView(ticket_id, chat_locked=False, claimed=is_claimed)
+                    await interaction.message.edit(view=view)
+                    
+                    embed = discord.Embed(
+                        title="🔓 Chat Liberado",
+                        description=f"O chat foi liberado por {interaction.user.mention}. O usuário já pode enviar mensagens.",
+                        color=discord.Color.blue(),
+                    )
+                    await interaction.channel.send(embed=embed)
+                    await interaction.response.send_message("✅ Chat liberado!", ephemeral=True)
+                else:
+                    await interaction.response.send_message("❌ Usuário não encontrado.", ephemeral=True)
+            
+            # ═════════ LOCK ═════════
+            elif custom_id.startswith("ticket_lock_"):
+                ticket_id = custom_id.replace("ticket_lock_", "")
+                
+                ticket_info = await self._get_ticket_info(interaction.guild.id, ticket_id)
+                if not ticket_info:
+                    await interaction.response.send_message("❌ Ticket não encontrado.", ephemeral=True)
+                    return
+                
+                is_claimed = ticket_info.get("claimed_by") is not None
+                
+                user_id = ticket_info.get("user_id")
+                user = interaction.guild.get_member(int(user_id)) if user_id else None
+                
+                if user:
+                    await interaction.channel.set_permissions(user, read_messages=True, send_messages=is_claimed)
+                    view = TicketControlView(ticket_id, chat_locked=True, claimed=True)
+                    await interaction.message.edit(view=view)
+                    
+                    embed = discord.Embed(
+                        title="🔒 Chat Bloqueado",
+                        description=f"O chat foi bloqueado por {interaction.user.mention}.",
+                        color=discord.Color.orange(),
+                    )
+                    await interaction.channel.send(embed=embed)
+                    await interaction.response.send_message("✅ Chat bloqueado!", ephemeral=True)
+                else:
+                    await interaction.response.send_message("❌ Usuário não encontrado.", ephemeral=True)
+            
+            # ═════════ CLAIM ═════════
+            elif custom_id.startswith("ticket_claim_"):
+                ticket_id = custom_id.replace("ticket_claim_", "")
+                
+                result = await self._api_put(
+                    f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/claim",
+                    {"staff_id": str(interaction.user.id)}
                 )
-                await interaction.channel.send(embed=embed)
-                await interaction.response.send_message("✅ Chat liberado!", ephemeral=True)
-            else:
-                await interaction.response.send_message("❌ Usuário não encontrado.", ephemeral=True)
-
-        # ═════════ BLOQUEAR CHAT ═════════
-
-        elif custom_id.startswith("ticket_lock_"):
-            ticket_id = custom_id.replace("ticket_lock_", "")
-            
-            ticket_info = await self._get_ticket_info(interaction.guild.id, ticket_id)
-            if not ticket_info:
-                await interaction.response.send_message("❌ Ticket não encontrado.", ephemeral=True)
-                return
-            
-            user_id = ticket_info.get("user_id")
-            user = interaction.guild.get_member(int(user_id)) if user_id else None
-            
-            if user:
-                await interaction.channel.set_permissions(user, read_messages=True, send_messages=False)
                 
-                view = TicketControlView(ticket_id, chat_locked=True, claimed=True)
-                await interaction.message.edit(view=view)
-                
-                embed = discord.Embed(
-                    title="🔒 Chat Bloqueado",
-                    description=f"O chat foi bloqueado por {interaction.user.mention}.",
-                    color=discord.Color.orange(),
-                )
-                await interaction.channel.send(embed=embed)
-                await interaction.response.send_message("✅ Chat bloqueado!", ephemeral=True)
-            else:
-                await interaction.response.send_message("❌ Usuário não encontrado.", ephemeral=True)
-
+                if result:
+                    ticket_info = await self._get_ticket_info(interaction.guild.id, ticket_id)
+                    if ticket_info:
+                        user_id = ticket_info.get("user_id")
+                        user = interaction.guild.get_member(int(user_id)) if user_id else None
+                        if user:
+                            await self._apply_ticket_permissions(
+                                interaction.channel, interaction.guild, user,
+                                claimed_by=str(interaction.user.id))
+                            await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
+                            
+                            try:
+                                view = TicketControlView(ticket_id, chat_locked=False, claimed=True)
+                                await interaction.message.edit(view=view)
+                            except:
+                                pass
+                            
+                            embed = discord.Embed(
+                                title="👤 Ticket Atendido",
+                                description=f"{interaction.user.mention} está atendendo este ticket.\n🔓 Chat liberado automaticamente.",
+                                color=discord.Color.blue(),
+                            )
+                            await interaction.channel.send(embed=embed)
+                    
+                    await interaction.response.send_message("👤 Ticket reivindicado! Chat liberado.", ephemeral=True)
+                else:
+                    await interaction.response.send_message("❌ Erro ao reivindicar ticket.", ephemeral=True)
+                    
 async def setup(bot: commands.Bot):
     await bot.add_cog(Tickets(bot))
