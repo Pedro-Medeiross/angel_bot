@@ -6,7 +6,6 @@ import aiohttp
 from typing import Optional
 import logging
 from src.core.config import config
-from src.utils.transcript import generate_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -276,36 +275,81 @@ class Tickets(commands.Cog):
             opened_at = ticket_info.get("created_at", "Desconhecido")
             ticket_number = str(ticket_info.get("ticket_number", ""))
         
-        # 1️⃣ Gera transcript
-        transcript_url = None
+        # 1️⃣ Gera transcript HTML
+        transcript_html = None
         try:
-            transcript_bytes = await generate_transcript(
-                channel=channel,
-                ticket_title=f"Ticket #{ticket_number}",
-                opened_by=opened_by_name,
-                opened_at=opened_at,
-                closed_by=str(user),
-                close_reason=reason
-            )
+            messages_data = []
+            async for message in channel.history(oldest_first=True, limit=500):
+                if message.author.bot and message.embeds:
+                    continue
+                
+                messages_data.append({
+                    "author_name": message.author.display_name,
+                    "author_username": message.author.name,
+                    "author_id": str(message.author.id),
+                    "author_avatar": str(message.author.display_avatar.url),
+                    "is_admin": message.author.guild_permissions.administrator if isinstance(message.author, discord.Member) else False,
+                    "content": message.content,
+                    "attachments": [
+                        {
+                            "url": a.url,           # URL direta do Discord (expira depois de um tempo)
+                            "filename": a.filename,
+                            "content_type": a.content_type,
+                            "size": a.size,
+                            "is_image": a.content_type and "image" in a.content_type,
+                            "is_video": a.content_type and "video" in a.content_type,
+                        }
+                        for a in message.attachments
+                    ],
+                    "stickers": [
+                        {
+                            "name": s.name,
+                            "url": str(s.url)
+                        }
+                        for s in message.stickers
+                    ],
+                    "embeds": [
+                        {
+                            "title": e.title,
+                            "description": e.description,
+                            "url": e.url,
+                            "image_url": str(e.image.url) if e.image else None,
+                            "thumbnail_url": str(e.thumbnail.url) if e.thumbnail else None,
+                        }
+                        for e in message.embeds
+                    ],
+                    "timestamp": message.created_at.isoformat()
+                })
             
-            # 2️⃣ Upload pra API (só o arquivo)
-            form = aiohttp.FormData()
-            form.add_field(
-                "file",
-                transcript_bytes,
-                filename=f"ticket-{ticket_number}.png",
-                content_type="image/png"
-            )
+            transcript_data = {
+                "ticket_id": ticket_id,
+                "ticket_number": ticket_number,
+                "guild_id": str(guild.id),
+                "guild_name": guild.name,
+                "guild_icon": str(guild.icon.url) if guild.icon else None,
+                "opened_by_name": opened_by_name,
+                "opened_by_id": opened_by_id,
+                "opened_at": opened_at,
+                "closed_by_name": str(user),
+                "closed_by_id": str(user.id),
+                "close_reason": reason,
+                "closed_at": discord.utils.utcnow().isoformat(),
+                "messages": messages_data
+            }
             
+            # 2️⃣ Envia transcript pra API como JSON
             async with aiohttp.ClientSession(auth=self.auth) as session:
                 async with session.post(
                     f"{self.api_url}/guilds/{guild.id}/tickets/{ticket_id}/transcript",
-                    data=form
+                    json=transcript_data
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         transcript_url = data.get("url")
-                        logger.info(f"📸 Transcript enviado: {transcript_url}")
+                        logger.info(f"📸 Transcript salvo: {transcript_url}")
+                    else:
+                        body = await resp.text()
+                        logger.error(f"❌ Erro ao salvar transcript: {resp.status} - {body}")
         except Exception as e:
             logger.error(f"❌ Erro ao gerar/enviar transcript: {e}")
         
@@ -355,7 +399,7 @@ class Tickets(commands.Cog):
                     view.add_item(Button(
                         label="Ver Transcrição",
                         style=discord.ButtonStyle.link,
-                        url=transcript_url,
+                        url=transcript_url,  # URL do frontend: https://dashboard.../transcript/{id}
                         emoji="📄"
                     ))
                     
@@ -534,7 +578,7 @@ class Tickets(commands.Cog):
                     await interaction.followup.send("❌ Painel não encontrado.", ephemeral=True)
                     return
                 
-                config_data = await self._api_get(f"/guilds/{guild.id}/tickets/config")
+                config_data = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
                 ticket_count = (config_data.get("ticket_counter", 0) + 1) if config_data else 1
                 
                 category_id = panel_data.get("category_id")
