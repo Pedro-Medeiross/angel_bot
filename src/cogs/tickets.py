@@ -38,8 +38,8 @@ class TicketControlView(View):
     
     def __init__(self, ticket_id: str, chat_locked: bool = True):
         super().__init__(timeout=None)
+        self.ticket_id = ticket_id
         
-        # Botão Liberar/Bloquear alternado
         if chat_locked:
             self.add_item(Button(
                 label="Liberar Chat",
@@ -68,6 +68,28 @@ class TicketControlView(View):
             custom_id=f"ticket_close_{ticket_id}",
             emoji="🔒"
         ))
+    
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Verifica permissões por botão"""
+        custom_id = interaction.data.get("custom_id", "")
+        
+        # Fechar - qualquer um pode tentar (validação no handler)
+        if custom_id.startswith("ticket_close_"):
+            return True
+        
+        # Liberar/Bloquear/Atender - só staff/admin
+        if interaction.user.guild_permissions.administrator:
+            return True
+        
+        cog = interaction.client.get_cog("Tickets")
+        if cog:
+            staff_roles = await cog._get_staff_roles(interaction.guild.id)
+            for sr in staff_roles:
+                role = interaction.guild.get_role(int(sr["role_id"]))
+                if role and role in interaction.user.roles:
+                    return True
+        
+        await interaction.response.send_message("❌ Apenas staff pode usar este botão.", ephemeral=True)
 
 class CloseTicketModal(Modal):
     """Modal pedindo motivo do fechamento"""
@@ -88,6 +110,7 @@ class CloseTicketModal(Modal):
     
     async def on_submit(self, interaction: discord.Interaction):
         # Determina o role baseado em como chegou aqui
+        await interaction.response.defer()
         ticket_info = await self.cog._get_ticket_info(interaction.guild.id, self.ticket_id)
         role = "owner" if ticket_info and str(interaction.user.id) == str(ticket_info.get("user_id")) else "claimed"
         await self.cog._close_ticket(interaction, self.ticket_id, self.reason.value, role)
@@ -786,8 +809,8 @@ class Tickets(commands.Cog):
         
         elif custom_id.startswith("confirm_close_"):
             ticket_id = custom_id.replace("confirm_close_", "")
-            # Desabilita a view de confirmação
-            await interaction.response.edit_message(content="✅ Fechando ticket...", view=None)
+            await interaction.response.defer()
+            await interaction.message.edit(content="✅ Fechando ticket...", view=None)
             await self._close_ticket(interaction, ticket_id, "Fechado pelo usuário", role="owner")
         
         elif custom_id.startswith("cancel_close_"):
@@ -810,6 +833,9 @@ class Tickets(commands.Cog):
                     user_id = ticket_info.get("user_id")
                     user = interaction.guild.get_member(int(user_id)) if user_id else None
                     if user:
+                        await self._apply_ticket_permissions(
+                            interaction.channel, interaction.guild, user,
+                            claimed_by=str(interaction.user.id))
                         await interaction.channel.set_permissions(user, send_messages=True)
                         
                         # Atualiza botão na mensagem original
