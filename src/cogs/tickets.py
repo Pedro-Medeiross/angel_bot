@@ -797,9 +797,9 @@ class Tickets(commands.Cog):
         elif custom_id.startswith("confirm_close_"):
             ticket_id = custom_id.replace("confirm_close_", "")
             await interaction.response.defer()
-            await interaction.message.edit(content="✅ Fechando ticket...", view=None)
+            await interaction.followup.send("✅ Fechando ticket...", ephemeral=True)
             await self._close_ticket(interaction, ticket_id, "Fechado pelo usuário", role="owner")
-        
+    
         elif custom_id.startswith("cancel_close_"):
             await interaction.response.edit_message(content="❌ Fechamento cancelado.", view=None)
         
