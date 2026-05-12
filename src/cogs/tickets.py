@@ -36,21 +36,37 @@ class TicketView(View):
 class TicketControlView(View):
     """Botões de controle do ticket (staff)"""
     
-    def __init__(self, ticket_id: str):
+    def __init__(self, ticket_id: str, chat_locked: bool = True):
         super().__init__(timeout=None)
         
-        self.add_item(Button(
-            label="Fechar",
-            style=discord.ButtonStyle.danger,
-            custom_id=f"ticket_close_{ticket_id}",
-            emoji="🔒"
-        ))
+        # Botão Liberar/Bloquear alternado
+        if chat_locked:
+            self.add_item(Button(
+                label="Liberar Chat",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"ticket_unlock_{ticket_id}",
+                emoji="🔓"
+            ))
+        else:
+            self.add_item(Button(
+                label="Bloquear Chat",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"ticket_lock_{ticket_id}",
+                emoji="🔒"
+            ))
         
         self.add_item(Button(
             label="Atender",
             style=discord.ButtonStyle.success,
             custom_id=f"ticket_claim_{ticket_id}",
             emoji="👤"
+        ))
+        
+        self.add_item(Button(
+            label="Fechar",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"ticket_close_{ticket_id}",
+            emoji="🔒"
         ))
 
 class CloseTicketModal(Modal):
@@ -553,10 +569,12 @@ class Tickets(commands.Cog):
                     channel, guild, user,
                     claimed_by=str(event.staff_id)
                 )
+                # Libera chat automaticamente
+                await channel.set_permissions(user, send_messages=True)
         
         embed = discord.Embed(
             title="👤 Ticket Atendido",
-            description=f"{staff.mention} está atendendo este ticket.",
+            description=f"{staff.mention} está atendendo este ticket.\n🔓 Chat liberado automaticamente.",
             color=discord.Color.blue(),
         )
         await channel.send(embed=embed)
@@ -618,7 +636,24 @@ class Tickets(commands.Cog):
                 
                 ticket_id = result.get("id")
                 
-                await self._apply_ticket_permissions(channel, guild, user)
+                staff_roles = await self._get_staff_roles(guild.id)
+
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True, attach_files=True, embed_links=True, add_reactions=True),
+                    user: discord.PermissionOverwrite(read_messages=True, send_messages=False)  # 👈 Bloqueado
+                }
+
+                for sr in staff_roles:
+                    role = guild.get_role(int(sr["role_id"]))
+                    if role and sr.get("can_view_all"):
+                        overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+                for role in guild.roles:
+                    if role.permissions.administrator and role.name != "@everyone":
+                        overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+                await channel.edit(overwrites=overwrites)
                 
                 embed = discord.Embed(
                     title=f"🎫 Ticket #{ticket_count}",
@@ -691,9 +726,90 @@ class Tickets(commands.Cog):
             )
             
             if result:
-                await interaction.response.send_message("👤 Ticket reivindicado!", ephemeral=True)
+                # Libera o chat automaticamente ao claimar
+                ticket_info = await self._get_ticket_info(interaction.guild.id, ticket_id)
+                if ticket_info:
+                    user_id = ticket_info.get("user_id")
+                    user = interaction.guild.get_member(int(user_id)) if user_id else None
+                    if user:
+                        await interaction.channel.set_permissions(user, send_messages=True)
+                        
+                        # Atualiza botão na mensagem original
+                        try:
+                            view = TicketControlView(ticket_id, chat_locked=False)
+                            await interaction.message.edit(view=view)
+                        except:
+                            pass
+                        
+                        embed = discord.Embed(
+                            title="👤 Ticket Atendido",
+                            description=f"{interaction.user.mention} está atendendo este ticket.\n🔓 Chat liberado automaticamente.",
+                            color=discord.Color.blue(),
+                        )
+                        await interaction.channel.send(embed=embed)
+                
+                await interaction.response.send_message("👤 Ticket reivindicado! Chat liberado.", ephemeral=True)
             else:
                 await interaction.response.send_message("❌ Erro ao reivindicar ticket.", ephemeral=True)
+                
+        # ═════════ LIBERAR CHAT ═════════
+
+        elif custom_id.startswith("ticket_unlock_"):
+            ticket_id = custom_id.replace("ticket_unlock_", "")
+            
+            ticket_info = await self._get_ticket_info(interaction.guild.id, ticket_id)
+            if not ticket_info:
+                await interaction.response.send_message("❌ Ticket não encontrado.", ephemeral=True)
+                return
+            
+            user_id = ticket_info.get("user_id")
+            user = interaction.guild.get_member(int(user_id)) if user_id else None
+            
+            if user:
+                await interaction.channel.set_permissions(user, send_messages=True)
+                
+                # Atualiza a mensagem com o botão alternado
+                view = TicketControlView(ticket_id, chat_locked=False)
+                await interaction.message.edit(view=view)
+                
+                embed = discord.Embed(
+                    title="🔓 Chat Liberado",
+                    description=f"O chat foi liberado por {interaction.user.mention}. O usuário já pode enviar mensagens.",
+                    color=discord.Color.blue(),
+                )
+                await interaction.channel.send(embed=embed)
+                await interaction.response.send_message("✅ Chat liberado!", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Usuário não encontrado.", ephemeral=True)
+
+        # ═════════ BLOQUEAR CHAT ═════════
+
+        elif custom_id.startswith("ticket_lock_"):
+            ticket_id = custom_id.replace("ticket_lock_", "")
+            
+            ticket_info = await self._get_ticket_info(interaction.guild.id, ticket_id)
+            if not ticket_info:
+                await interaction.response.send_message("❌ Ticket não encontrado.", ephemeral=True)
+                return
+            
+            user_id = ticket_info.get("user_id")
+            user = interaction.guild.get_member(int(user_id)) if user_id else None
+            
+            if user:
+                await interaction.channel.set_permissions(user, send_messages=False)
+                
+                view = TicketControlView(ticket_id, chat_locked=True)
+                await interaction.message.edit(view=view)
+                
+                embed = discord.Embed(
+                    title="🔒 Chat Bloqueado",
+                    description=f"O chat foi bloqueado por {interaction.user.mention}.",
+                    color=discord.Color.orange(),
+                )
+                await interaction.channel.send(embed=embed)
+                await interaction.response.send_message("✅ Chat bloqueado!", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Usuário não encontrado.", ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Tickets(bot))
