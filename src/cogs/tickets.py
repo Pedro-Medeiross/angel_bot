@@ -36,7 +36,7 @@ class TicketView(View):
 class TicketControlView(View):
     """Botões de controle do ticket (staff)"""
     
-    def __init__(self, ticket_id: str, chat_locked: bool = True):
+    def __init__(self, ticket_id: str, chat_locked: bool = True, claimed: bool = False):
         super().__init__(timeout=None)
         self.ticket_id = ticket_id
         
@@ -55,12 +55,14 @@ class TicketControlView(View):
                 emoji="🔒"
             ))
         
-        self.add_item(Button(
-            label="Atender",
-            style=discord.ButtonStyle.success,
-            custom_id=f"ticket_claim_{ticket_id}",
-            emoji="👤"
-        ))
+        # Só mostra "Atender" se não foi claimado ainda
+        if not claimed:
+            self.add_item(Button(
+                label="Atender",
+                style=discord.ButtonStyle.success,
+                custom_id=f"ticket_claim_{ticket_id}",
+                emoji="👤"
+            ))
         
         self.add_item(Button(
             label="Fechar",
@@ -70,14 +72,11 @@ class TicketControlView(View):
         ))
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Verifica permissões por botão"""
         custom_id = interaction.data.get("custom_id", "")
         
-        # Fechar - qualquer um pode tentar (validação no handler)
         if custom_id.startswith("ticket_close_"):
             return True
         
-        # Liberar/Bloquear/Atender - só staff/admin
         if interaction.user.guild_permissions.administrator:
             return True
         
@@ -90,6 +89,7 @@ class TicketControlView(View):
                     return True
         
         await interaction.response.send_message("❌ Apenas staff pode usar este botão.", ephemeral=True)
+        return False
 
 class CloseTicketModal(Modal):
     """Modal pedindo motivo do fechamento"""
@@ -836,11 +836,11 @@ class Tickets(commands.Cog):
                         await self._apply_ticket_permissions(
                             interaction.channel, interaction.guild, user,
                             claimed_by=str(interaction.user.id))
-                        await interaction.channel.set_permissions(user, send_messages=True)
+                        await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
                         
                         # Atualiza botão na mensagem original
                         try:
-                            view = TicketControlView(ticket_id, chat_locked=False)
+                            view = TicketControlView(ticket_id, chat_locked=False, claimed=True)
                             await interaction.message.edit(view=view)
                         except:
                             pass
@@ -870,10 +870,10 @@ class Tickets(commands.Cog):
             user = interaction.guild.get_member(int(user_id)) if user_id else None
             
             if user:
-                await interaction.channel.set_permissions(user, send_messages=True)
+                await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
                 
                 # Atualiza a mensagem com o botão alternado
-                view = TicketControlView(ticket_id, chat_locked=False)
+                view = TicketControlView(ticket_id, chat_locked=False, claimed=True)
                 await interaction.message.edit(view=view)
                 
                 embed = discord.Embed(
@@ -900,9 +900,9 @@ class Tickets(commands.Cog):
             user = interaction.guild.get_member(int(user_id)) if user_id else None
             
             if user:
-                await interaction.channel.set_permissions(user, send_messages=False)
+                await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
                 
-                view = TicketControlView(ticket_id, chat_locked=True)
+                view = TicketControlView(ticket_id, chat_locked=True, claimed=True)
                 await interaction.message.edit(view=view)
                 
                 embed = discord.Embed(

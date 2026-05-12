@@ -17,6 +17,40 @@ class ChannelLogs(commands.Cog):
         self.log_api = log_api
         self._position_queue = {}
         self._position_task = {}
+        self._ignored_categories = {}  # guild_id: set[category_id]
+        self._tickets_cog = None  # Referência à cog de tickets
+    
+    async def _get_ignored_categories(self, guild_id: int) -> set:
+        """Busca categorias de ticket para ignorar nos logs"""
+        if guild_id in self._ignored_categories:
+            return self._ignored_categories[guild_id]
+        
+        ignored = set()
+        
+        # Busca painéis de ticket ativos
+        try:
+            async with aiohttp.ClientSession(auth=self.auth) as session:
+                url = f"{self.api_url}/guilds/{guild_id}/tickets/panels"
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        panels = await resp.json()
+                        for panel in panels:
+                            cat_id = panel.get("category_id")
+                            if cat_id:
+                                ignored.add(int(cat_id))
+        except Exception:
+            pass
+        
+        self._ignored_categories[guild_id] = ignored
+        return ignored
+    
+    def _is_ignored(self, channel: discord.abc.GuildChannel) -> bool:
+        """Verifica se o canal está numa categoria de ticket"""
+        if not hasattr(channel, 'category_id') or not channel.category_id:
+            return False
+        
+        ignored = self._ignored_categories.get(channel.guild.id, set())
+        return channel.category_id in ignored
     
     async def get_log_channel(self, guild_id: int, log_type: str) -> int | None:
         try:
@@ -41,11 +75,22 @@ class ChannelLogs(commands.Cog):
         }
         return type_map.get(channel.type, str(channel.type))
     
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Atualiza cache de categorias ignoradas"""
+        if not self.bot.is_ready():
+            return
+        for guild in self.bot.guilds:
+            await self._get_ignored_categories(guild.id)
+    
     # ═══════════════ CHANNEL CREATE ═══════════════
     
     @commands.Cog.listener()
     async def on_guild_channel_create(self, channel: discord.abc.GuildChannel):
         """Log de canal criado"""
+        
+        if self._is_ignored(channel):
+            return
         
         log_channel_id = await self.get_log_channel(channel.guild.id, "channel_create")
         
@@ -54,8 +99,7 @@ class ChannelLogs(commands.Cog):
             if log_channel:
                 embed = discord.Embed(
                     title="📢 Canal criado",
-                    color=discord.Color.green(),
-                    timestamp=discord.utils.utcnow()
+                    color=discord.Color.green()
                 )
                 embed.add_field(name="📛 Nome", value=channel.name, inline=True)
                 embed.add_field(name="🆔 ID", value=channel.id, inline=True)
@@ -91,6 +135,9 @@ class ChannelLogs(commands.Cog):
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel):
         """Log de canal deletado"""
         
+        if self._is_ignored(channel):
+            return
+        
         log_channel_id = await self.get_log_channel(channel.guild.id, "channel_delete")
         
         if log_channel_id:
@@ -98,8 +145,7 @@ class ChannelLogs(commands.Cog):
             if log_channel:
                 embed = discord.Embed(
                     title="🗑️ Canal deletado",
-                    color=discord.Color.red(),
-                    timestamp=discord.utils.utcnow()
+                    color=discord.Color.red()
                 )
                 embed.add_field(name="📛 Nome", value=channel.name, inline=True)
                 embed.add_field(name="🆔 ID", value=channel.id, inline=True)
@@ -130,6 +176,9 @@ class ChannelLogs(commands.Cog):
     @commands.Cog.listener()
     async def on_guild_channel_update(self, before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
         """Log de canal editado"""
+        
+        if self._is_ignored(after):
+            return
         
         # Se mudou só a posição, agrupa
         if before.position != after.position and before.name == after.name:
