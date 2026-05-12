@@ -366,14 +366,22 @@ class Tickets(commands.Cog):
         else:
             title = "🔒 Ticket Fechado"
             description = f"Ticket fechado por {user.mention}"
-        
+
         embed = discord.Embed(
             title=title,
             description=description,
             color=discord.Color.red()
         )
         embed.add_field(name="📝 Resolução", value=reason, inline=False)
-        
+
+        # 🔒 Remove permissão de escrita de todos antes de enviar a mensagem
+        await channel.set_permissions(guild.default_role, send_messages=False)
+        for target, overwrite in channel.overwrites.items():
+            if isinstance(target, (discord.Member, discord.Role)) and overwrite.send_messages:
+                await channel.set_permissions(target, send_messages=False)
+
+        # Bot ainda pode enviar a mensagem final
+        await channel.set_permissions(guild.me, send_messages=True)
         await channel.send(embed=embed, delete_after=5)
         
         # 5️⃣ Envia transcript no canal configurado
