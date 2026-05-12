@@ -116,6 +116,75 @@ class ConfirmCloseView(View):
     async def on_timeout(self):
         if hasattr(self, 'message') and self.message:
             await self.message.edit(content="⏰ Tempo esgotado.", view=None)
+            
+# ═══════════════ CATEGORIA ═══════════════
+
+class CategorySelect(discord.ui.Select):
+    """Dropdown para escolher categoria"""
+    
+    def __init__(self, panel_id: str, cog):
+        self.panel_id = panel_id
+        self.cog = cog
+        
+        options = [
+            discord.SelectOption(label="🐛 Bug/Erro", value="bug", description="Prioridade: URGENT", emoji="🐛"),
+            discord.SelectOption(label="🚨 Denúncia", value="denuncia", description="Prioridade: URGENT", emoji="🚨"),
+            discord.SelectOption(label="💎 Contribuidor", value="contribuidor", description="Prioridade: HIGH", emoji="💎"),
+            discord.SelectOption(label="💰 Financeiro", value="financeiro", description="Prioridade: HIGH", emoji="💰"),
+            discord.SelectOption(label="🌟 Influencer/Parceria", value="influencer", description="Prioridade: MEDIUM", emoji="🌟"),
+            discord.SelectOption(label="❓ Dúvida", value="duvida", description="Prioridade: MEDIUM", emoji="❓"),
+            discord.SelectOption(label="🔧 Suporte Técnico", value="suporte", description="Prioridade: MEDIUM", emoji="🔧"),
+            discord.SelectOption(label="📌 Outro", value="outro", description="Prioridade: LOW", emoji="📌"),
+        ]
+        super().__init__(placeholder="Selecione a categoria...", options=options)
+    
+    async def callback(self, interaction: discord.Interaction):
+        category_key = self.values[0]
+        modal = OpenTicketModal(self.panel_id, category_key, self.cog)
+        await interaction.response.send_modal(modal)
+
+class CategoryView(View):
+    """View com dropdown de categoria"""
+    
+    def __init__(self, panel_id: str, cog):
+        super().__init__(timeout=300)
+        self.add_item(CategorySelect(panel_id, cog))
+
+class OpenTicketModal(Modal):
+    """Modal para o usuário preencher ao abrir o ticket"""
+    
+    def __init__(self, panel_id: str, category_key: str, cog):
+        super().__init__(title="Abrir Ticket")
+        self.panel_id = panel_id
+        self.category_key = category_key
+        self.cog = cog
+        
+        self.subject = TextInput(
+            label="Assunto",
+            placeholder="Descreva resumidamente o motivo...",
+            style=discord.TextStyle.short,
+            required=True,
+            max_length=100
+        )
+        self.add_item(self.subject)
+        
+        self.description = TextInput(
+            label="Descrição",
+            placeholder="Detalhe o que está acontecendo...",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=1000
+        )
+        self.add_item(self.description)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.cog._create_ticket(
+            interaction,
+            self.panel_id,
+            self.category_key,
+            self.subject.value,
+            self.description.value
+        )
 
 # ═══════════════ COG ═══════════════
 
@@ -226,48 +295,134 @@ class Tickets(commands.Cog):
         
         return False, "Você não tem permissão para fechar este ticket."
     
-    async def _apply_ticket_permissions(self, channel: discord.TextChannel, guild: discord.Guild, user: discord.Member, claimed_by: str = None):
-        """Aplica permissões no canal do ticket"""
-        
+    async def _apply_ticket_permissions(self, channel, guild, user, claimed_by=None):
         staff_roles = await self._get_staff_roles(guild.id)
         
         base_perms = discord.PermissionOverwrite(
-            read_messages=True,
-            send_messages=True,
-            attach_files=True,
-            embed_links=True,
-            add_reactions=True,
-            read_message_history=True,
-            use_external_emojis=True,
-            use_external_stickers=True
+            read_messages=True, send_messages=True,
+            attach_files=True, embed_links=True, add_reactions=True,
+            read_message_history=True, use_external_emojis=True, use_external_stickers=True
         )
         
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            guild.me: discord.PermissionOverwrite(
-                read_messages=True, send_messages=True, manage_channels=True,
-                attach_files=True, embed_links=True, add_reactions=True
-            ),
-            user: base_perms
-        }
+        # Pega overwrites atuais (não sobrescreve!)
+        overwrites = {}
+        for target, perm in channel.overwrites.items():
+            overwrites[target] = perm
         
-        if claimed_by:
-            claimed_member = guild.get_member(int(claimed_by))
-            if claimed_member:
-                overwrites[claimed_member] = base_perms
+        # Garante que o user tem acesso
+        overwrites[user] = base_perms
         
+        # Garante que o bot tem acesso
+        overwrites[guild.me] = discord.PermissionOverwrite(
+            read_messages=True, send_messages=True, manage_channels=True,
+            attach_files=True, embed_links=True, add_reactions=True
+        )
+        
+        # @everyone sem acesso
+        overwrites[guild.default_role] = discord.PermissionOverwrite(read_messages=False)
+        
+        # Staff com can_view_all
         for sr in staff_roles:
             role = guild.get_role(int(sr["role_id"]))
             if role and sr.get("can_view_all"):
                 overwrites[role] = base_perms
         
+        # Admin
         for role in guild.roles:
             if role.permissions.administrator and role.name != "@everyone":
                 overwrites[role] = base_perms
         
+        # Staff que claimou
+        if claimed_by:
+            claimed_member = guild.get_member(int(claimed_by))
+            if claimed_member:
+                overwrites[claimed_member] = base_perms
+        
         await channel.edit(overwrites=overwrites)
-        logger.info(f"🔒 Permissões aplicadas em {channel.name}")
-    
+        
+    async def _create_ticket(self, interaction, panel_id, category_key, subject, description):
+        """Cria o ticket após preenchimento do modal"""
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        guild = interaction.guild
+        user = interaction.user
+        
+        panel_data = await self._api_get(f"/guilds/{guild.id}/tickets/panels/{panel_id}")
+        if not panel_data:
+            await interaction.followup.send("❌ Painel não encontrado.", ephemeral=True)
+            return
+        
+        config_data = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
+        ticket_count = (config_data.get("ticket_counter", 0) + 1) if config_data else 1
+        
+        category_id = panel_data.get("category_id")
+        category = guild.get_channel(int(category_id)) if category_id else None
+        
+        channel_name = f"ticket-{ticket_count:04d}-{user.name}"
+        
+        try:
+            channel = await guild.create_text_channel(
+                name=channel_name,
+                category=category,
+                topic=f"Ticket #{ticket_count} de {user.name} | {subject}",
+                reason=f"Ticket aberto por {user.name}"
+            )
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Não tenho permissão para criar canais.", ephemeral=True)
+            return
+        
+        result = await self._api_post(f"/guilds/{guild.id}/tickets/open", {
+            "user_id": str(user.id),
+            "channel_id": str(channel.id),
+            "panel_id": panel_id,
+            "subject": subject,
+            "description": description,
+            "category": category_key
+        })
+        
+        if not result:
+            await channel.delete()
+            await interaction.followup.send("❌ Erro ao registrar ticket.", ephemeral=True)
+            return
+        
+        ticket_id = result.get("id")
+        
+        # Permissões
+        staff_roles = await self._get_staff_roles(guild.id)
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True, attach_files=True, embed_links=True, add_reactions=True),
+            user: discord.PermissionOverwrite(read_messages=True, send_messages=False)
+        }
+        for sr in staff_roles:
+            role = guild.get_role(int(sr["role_id"]))
+            if role:
+                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        for role in guild.roles:
+            if role.permissions.administrator and role.name != "@everyone":
+                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        await channel.edit(overwrites=overwrites)
+        
+        embed = discord.Embed(
+            title=f"🎫 Ticket #{ticket_count}",
+            description=f"Olá {user.mention}, um membro da equipe irá atendê-lo em breve.\n\n**Assunto:** {subject}\n**Descrição:** {description}",
+            color=discord.Color.green(),
+        )
+        embed.add_field(name="📝 Ticket ID", value=ticket_id, inline=True)
+        embed.add_field(name="👤 Aberto por", value=user.mention, inline=True)
+        embed.add_field(name="📂 Categoria", value=category_key, inline=True)
+        embed.set_footer(text="Aguarde um staff liberar o chat.")
+        
+        view = TicketControlView(ticket_id=ticket_id)
+        await channel.send(embed=embed, view=view)
+        
+        await interaction.followup.send(
+            f"🎫 Ticket #{ticket_count} aberto! {channel.mention}\nAguarde um staff liberar o chat.",
+            ephemeral=True
+        )
+        logger.info(f"✅ Ticket criado: {channel.id} ticket_id={ticket_id} categoria={category_key}")
+        
     async def _close_ticket(self, interaction: discord.Interaction, ticket_id: str, reason: str, role: str = "claimed"):
         """Executa o fechamento do ticket"""
         
@@ -593,89 +748,12 @@ class Tickets(commands.Cog):
         if custom_id.startswith("ticket_open_"):
             panel_id = custom_id.replace("ticket_open_", "")
             
-            await interaction.response.defer(ephemeral=True)
-            
-            try:
-                guild = interaction.guild
-                user = interaction.user
-                
-                panel_data = await self._api_get(f"/guilds/{guild.id}/tickets/panels/{panel_id}")
-                if not panel_data:
-                    await interaction.followup.send("❌ Painel não encontrado.", ephemeral=True)
-                    return
-                
-                config_data = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
-                ticket_count = (config_data.get("ticket_counter", 0) + 1) if config_data else 1
-                
-                category_id = panel_data.get("category_id")
-                category = guild.get_channel(int(category_id)) if category_id else None
-                
-                channel_name = f"ticket-{ticket_count:04d}-{user.name}"
-                
-                try:
-                    channel = await guild.create_text_channel(
-                        name=channel_name,
-                        category=category,
-                        topic=f"Ticket #{ticket_count} de {user.name}",
-                        reason=f"Ticket aberto por {user.name}"
-                    )
-                except discord.Forbidden:
-                    await interaction.followup.send("❌ Não tenho permissão para criar canais.", ephemeral=True)
-                    return
-                
-                result = await self._api_post(f"/guilds/{guild.id}/tickets/open", {
-                    "user_id": str(user.id),
-                    "channel_id": str(channel.id),
-                    "panel_id": panel_id
-                })
-                
-                if not result:
-                    await channel.delete()
-                    await interaction.followup.send("❌ Erro ao registrar ticket.", ephemeral=True)
-                    return
-                
-                ticket_id = result.get("id")
-                
-                staff_roles = await self._get_staff_roles(guild.id)
-
-                overwrites = {
-                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True, attach_files=True, embed_links=True, add_reactions=True),
-                    user: discord.PermissionOverwrite(read_messages=True, send_messages=False)  # 👈 Bloqueado
-                }
-
-                for sr in staff_roles:
-                    role = guild.get_role(int(sr["role_id"]))
-                    if role and sr.get("can_view_all"):
-                        overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-
-                for role in guild.roles:
-                    if role.permissions.administrator and role.name != "@everyone":
-                        overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-
-                await channel.edit(overwrites=overwrites)
-                
-                embed = discord.Embed(
-                    title=f"🎫 Ticket #{ticket_count}",
-                    description=f"Olá {user.mention}, um membro da equipe irá atendê-lo em breve.",
-                    color=discord.Color.green(),
-                )
-                embed.add_field(name="📝 Ticket ID", value=ticket_id, inline=True)
-                embed.add_field(name="👤 Aberto por", value=user.mention, inline=True)
-                embed.set_footer(text="Use os botões abaixo para gerenciar o ticket.")
-                
-                view = TicketControlView(ticket_id=ticket_id)
-                await channel.send(embed=embed, view=view)
-                
-                await interaction.followup.send(
-                    f"🎫 Ticket #{ticket_count} aberto! {channel.mention}",
-                    ephemeral=True
-                )
-                logger.info(f"✅ Ticket criado: {channel.id} ticket_id={ticket_id} número=#{ticket_count}")
-            
-            except aiohttp.ClientError as e:
-                await interaction.followup.send("❌ Erro ao comunicar com a API.", ephemeral=True)
-                logger.error(f"❌ Erro ticket_open: {e}")
+            view = CategoryView(panel_id, self)
+            await interaction.response.send_message(
+                "📂 **Selecione a categoria do seu ticket:**",
+                view=view,
+                ephemeral=True
+            )
         
         # ═════════ FECHAR TICKET ═════════
         
