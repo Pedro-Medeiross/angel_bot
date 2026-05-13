@@ -34,61 +34,92 @@ class TicketView(View):
         ))
 
 class TicketControlView(View):
-    """Botões de controle do ticket (staff)"""
-    
     def __init__(self, ticket_id: str, chat_locked: bool = True, claimed: bool = False):
         super().__init__(timeout=None)
         self.ticket_id = ticket_id
         
-        if chat_locked:
-            self.add_item(Button(
-                label="Liberar Chat",
-                style=discord.ButtonStyle.primary,
-                custom_id=f"ticket_unlock_{ticket_id}",
-                emoji="🔓"
-            ))
-        else:
-            self.add_item(Button(
-                label="Bloquear Chat",
-                style=discord.ButtonStyle.secondary,
-                custom_id=f"ticket_lock_{ticket_id}",
-                emoji="🔒"
-            ))
-        
-        # Só mostra "Atender" se não foi claimado ainda
         if not claimed:
-            self.add_item(Button(
-                label="Atender",
-                style=discord.ButtonStyle.success,
-                custom_id=f"ticket_claim_{ticket_id}",
-                emoji="👤"
-            ))
-        
-        self.add_item(Button(
-            label="Fechar",
-            style=discord.ButtonStyle.danger,
-            custom_id=f"ticket_close_{ticket_id}",
-            emoji="🔒"
-        ))
+            # Pré-claim: Liberar/Bloquear + Atender + Fechar
+            if chat_locked:
+                self.add_item(Button(label="Liberar Chat", style=discord.ButtonStyle.primary, custom_id=f"ticket_unlock_{ticket_id}", emoji="🔓", row=0))
+            else:
+                self.add_item(Button(label="Bloquear Chat", style=discord.ButtonStyle.secondary, custom_id=f"ticket_lock_{ticket_id}", emoji="🔒", row=0))
+            self.add_item(Button(label="Atender", style=discord.ButtonStyle.success, custom_id=f"ticket_claim_{ticket_id}", emoji="👤", row=0))
+            self.add_item(Button(label="Fechar", style=discord.ButtonStyle.danger, custom_id=f"ticket_close_{ticket_id}", emoji="🔒", row=0))
+        else:
+            # Pós-claim: Add, Remove, Transferir, Prioridade, Lock/Unlock, Fechar
+            if chat_locked:
+                self.add_item(Button(label="Liberar", style=discord.ButtonStyle.primary, custom_id=f"ticket_unlock_{ticket_id}", emoji="🔓", row=0))
+            else:
+                self.add_item(Button(label="Bloquear", style=discord.ButtonStyle.secondary, custom_id=f"ticket_lock_{ticket_id}", emoji="🔒", row=0))
+            self.add_item(Button(label="Prioridade", style=discord.ButtonStyle.primary, custom_id=f"ticket_priority_{ticket_id}", emoji="⚠️", row=0))
+            self.add_item(Button(label="Transferir", style=discord.ButtonStyle.primary, custom_id=f"ticket_transfer_{ticket_id}", emoji="🔄", row=0))
+            self.add_item(Button(label="Add Membro", style=discord.ButtonStyle.success, custom_id=f"ticket_add_{ticket_id}", emoji="➕", row=1))
+            self.add_item(Button(label="Remover", style=discord.ButtonStyle.danger, custom_id=f"ticket_remove_{ticket_id}", emoji="➖", row=1))
+            self.add_item(Button(label="Fechar", style=discord.ButtonStyle.danger, custom_id=f"ticket_close_{ticket_id}", emoji="🔒", row=1))
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
-        
         if custom_id.startswith("ticket_close_"):
             return True
-        
         if interaction.user.guild_permissions.administrator:
             return True
-        
-        if self.cog:
-            staff_roles = await self.cog._get_staff_roles(interaction.guild.id)
+        cog = interaction.client.get_cog("Tickets")
+        if cog:
+            staff_roles = await cog._get_staff_roles(interaction.guild.id)
             for sr in staff_roles:
                 role = interaction.guild.get_role(int(sr["role_id"]))
                 if role and role in interaction.user.roles:
                     return True
-        
         await interaction.response.send_message("❌ Apenas staff pode usar este botão.", ephemeral=True)
         return False
+    
+class AddMemberModal(Modal):
+    def __init__(self, ticket_id: str, cog):
+        super().__init__(title="Adicionar Membro")
+        self.ticket_id = ticket_id
+        self.cog = cog
+        self.target = TextInput(label="ID ou @menção do usuário", placeholder="123456789 ou @usuario", required=True, max_length=100)
+        self.add_item(self.target)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        target_id = self.target.value.strip().replace("<@", "").replace(">", "").replace("!", "")
+        await self.cog._add_member(interaction, self.ticket_id, target_id)
+
+class RemoveMemberModal(Modal):
+    def __init__(self, ticket_id: str, cog):
+        super().__init__(title="Remover Membro")
+        self.ticket_id = ticket_id
+        self.cog = cog
+        self.target = TextInput(label="ID ou @menção do usuário", placeholder="123456789 ou @usuario", required=True, max_length=100)
+        self.add_item(self.target)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        target_id = self.target.value.strip().replace("<@", "").replace(">", "").replace("!", "")
+        await self.cog._remove_member(interaction, self.ticket_id, target_id)
+
+class TransferTicketModal(Modal):
+    def __init__(self, ticket_id: str, cog):
+        super().__init__(title="Transferir Ticket")
+        self.ticket_id = ticket_id
+        self.cog = cog
+        self.target = TextInput(label="ID ou @menção do staff", placeholder="123456789 ou @staff", required=True, max_length=100)
+        self.add_item(self.target)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        target_id = self.target.value.strip().replace("<@", "").replace(">", "").replace("!", "")
+        await self.cog._transfer_ticket(interaction, self.ticket_id, target_id)
+
+class PriorityModal(Modal):
+    def __init__(self, ticket_id: str, cog):
+        super().__init__(title="Mudar Prioridade")
+        self.ticket_id = ticket_id
+        self.cog = cog
+        self.priority = TextInput(label="Prioridade", placeholder="urgent, high, medium, low", required=True, max_length=10)
+        self.add_item(self.priority)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.cog._change_priority(interaction, self.ticket_id, self.priority.value.lower())
 
 class CloseTicketModal(Modal):
     """Modal pedindo motivo do fechamento"""
@@ -149,14 +180,14 @@ class CategorySelect(discord.ui.Select):
         self.cog = cog
         
         options = [
-            discord.SelectOption(label="🐛 Bug/Erro", value="bug", description="Prioridade: URGENT", emoji="🐛"),
-            discord.SelectOption(label="🚨 Denúncia", value="denuncia", description="Prioridade: URGENT", emoji="🚨"),
-            discord.SelectOption(label="💎 Contribuidor", value="contribuidor", description="Prioridade: HIGH", emoji="💎"),
-            discord.SelectOption(label="💰 Financeiro", value="financeiro", description="Prioridade: HIGH", emoji="💰"),
-            discord.SelectOption(label="🌟 Influencer/Parceria", value="influencer", description="Prioridade: MEDIUM", emoji="🌟"),
-            discord.SelectOption(label="❓ Dúvida", value="duvida", description="Prioridade: MEDIUM", emoji="❓"),
-            discord.SelectOption(label="🔧 Suporte Técnico", value="suporte", description="Prioridade: MEDIUM", emoji="🔧"),
-            discord.SelectOption(label="📌 Outro", value="outro", description="Prioridade: LOW", emoji="📌"),
+            discord.SelectOption(label="🐛 Bug/Erro", value="bug", emoji="🐛"),
+            discord.SelectOption(label="🚨 Denúncia", value="denuncia", emoji="🚨"),
+            discord.SelectOption(label="💎 Contribuidor", value="contribuidor", emoji="💎"),
+            discord.SelectOption(label="💰 Financeiro", value="financeiro", emoji="💰"),
+            discord.SelectOption(label="🌟 Influencer/Parceria", value="influencer", emoji="🌟"),
+            discord.SelectOption(label="❓ Dúvida", value="duvida", emoji="❓"),
+            discord.SelectOption(label="🔧 Suporte Técnico", value="suporte", emoji="🔧"),
+            discord.SelectOption(label="📌 Outro", value="outro", emoji="📌"),
         ]
         super().__init__(placeholder="Selecione a categoria...", options=options)
     
@@ -426,6 +457,21 @@ class Tickets(commands.Cog):
                 overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
         await channel.edit(overwrites=overwrites)
         
+        # Ordena por prioridade (após permissões)
+        priority_positions = {
+            "bug": 0, "denuncia": 0,
+            "contribuidor": 1, "financeiro": 1,
+            "influencer": 2, "duvida": 2, "suporte": 2,
+            "outro": 3,
+        }
+        if category:
+            target_pos = priority_positions.get(category_key, 3)
+            try:
+                await channel.edit(position=target_pos)
+            except:
+                pass
+        
+        # Embed
         embed = discord.Embed(
             title=f"🎫 Ticket #{ticket_count}",
             description=f"Olá {user.mention}, um membro da equipe irá atendê-lo em breve.\n\n**Assunto:** {subject}\n**Descrição:** {description}",
@@ -439,8 +485,17 @@ class Tickets(commands.Cog):
         view = TicketControlView(ticket_id=ticket_id)
         await channel.send(embed=embed, view=view)
         
+        # Botão "Ir para o Ticket"
+        link_view = View()
+        link_view.add_item(Button(
+            label="Ir para o Ticket",
+            style=discord.ButtonStyle.link,
+            url=channel.jump_url,
+            emoji="🎫"
+        ))
         await interaction.followup.send(
-            f"🎫 Ticket #{ticket_count} aberto! {channel.mention}\nAguarde um staff liberar o chat.",
+            f"🎫 Ticket #{ticket_count} aberto!",
+            view=link_view,
             ephemeral=True
         )
         logger.info(f"✅ Ticket criado: {channel.id} ticket_id={ticket_id} categoria={category_key}")
@@ -688,6 +743,54 @@ class Tickets(commands.Cog):
         
         await channel.edit(overwrites=overwrites)
         logger.info(f"🔒 Chat {'bloqueado' if locked else 'liberado'} em {channel.name}")
+        
+    async def _add_member(self, interaction, ticket_id, target_id):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            member = interaction.guild.get_member(int(target_id))
+            if not member:
+                await interaction.followup.send("❌ Usuário não encontrado.", ephemeral=True)
+                return
+            await interaction.channel.set_permissions(member, read_messages=True, send_messages=True)
+            await interaction.followup.send(f"✅ {member.mention} adicionado ao ticket.", ephemeral=True)
+        except:
+            await interaction.followup.send("❌ Erro ao adicionar membro.", ephemeral=True)
+
+    async def _remove_member(self, interaction, ticket_id, target_id):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            member = interaction.guild.get_member(int(target_id))
+            if not member:
+                await interaction.followup.send("❌ Usuário não encontrado.", ephemeral=True)
+                return
+            if member.guild_permissions.administrator:
+                await interaction.followup.send("❌ Não pode remover administrador.", ephemeral=True)
+                return
+            await interaction.channel.set_permissions(member, overwrite=None)
+            await interaction.followup.send(f"✅ {member.mention} removido do ticket.", ephemeral=True)
+        except:
+            await interaction.followup.send("❌ Erro ao remover membro.", ephemeral=True)
+
+    async def _change_priority(self, interaction, ticket_id, priority):
+        await interaction.response.defer(ephemeral=True)
+        valid = ["urgent", "high", "medium", "low"]
+        if priority not in valid:
+            await interaction.followup.send(f"❌ Prioridade inválida. Use: {', '.join(valid)}", ephemeral=True)
+            return
+        await self._api_put(f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/priority", {"priority": priority})
+        await interaction.followup.send(f"✅ Prioridade alterada para **{priority.upper()}**", ephemeral=True)
+
+    async def _transfer_ticket(self, interaction, ticket_id, target_id):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            new_staff = interaction.guild.get_member(int(target_id))
+            if not new_staff:
+                await interaction.followup.send("❌ Staff não encontrado.", ephemeral=True)
+                return
+            await self._api_put(f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/transfer", {"to_staff_id": str(new_staff.id)})
+            await interaction.followup.send(f"✅ Ticket transferido para {new_staff.mention}.", ephemeral=True)
+        except:
+            await interaction.followup.send("❌ Erro ao transferir.", ephemeral=True)
     
     # ═══════════════ REGISTRAR VIEWS NO STARTUP ═══════════════
     
@@ -992,6 +1095,26 @@ class Tickets(commands.Cog):
                     await interaction.response.send_message("👤 Ticket reivindicado! Chat liberado.", ephemeral=True)
                 else:
                     await interaction.response.send_message("❌ Erro ao reivindicar ticket.", ephemeral=True)
-                    
+            
+            elif custom_id.startswith("ticket_add_"):
+                ticket_id = custom_id.replace("ticket_add_", "")
+                modal = AddMemberModal(ticket_id, self)
+                await interaction.response.send_modal(modal)
+
+            elif custom_id.startswith("ticket_remove_"):
+                ticket_id = custom_id.replace("ticket_remove_", "")
+                modal = RemoveMemberModal(ticket_id, self)
+                await interaction.response.send_modal(modal)
+
+            elif custom_id.startswith("ticket_transfer_"):
+                ticket_id = custom_id.replace("ticket_transfer_", "")
+                modal = TransferTicketModal(ticket_id, self)
+                await interaction.response.send_modal(modal)
+
+            elif custom_id.startswith("ticket_priority_"):
+                ticket_id = custom_id.replace("ticket_priority_", "")
+                modal = PriorityModal(ticket_id, self)
+                await interaction.response.send_modal(modal)
+                                
 async def setup(bot: commands.Bot):
     await bot.add_cog(Tickets(bot))
