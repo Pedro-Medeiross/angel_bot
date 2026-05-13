@@ -614,6 +614,80 @@ class Tickets(commands.Cog):
             logger.info(f"🗑️ Canal deletado: {channel.id} ticket={ticket_id}")
         except discord.Forbidden:
             logger.error(f"❌ Sem permissão para deletar canal: {channel.id}")
+            
+            
+    async def _apply_chat_lock(self, channel, guild, locked: bool = True):
+        """
+        Bloqueia ou libera o chat para todos que não são staff.
+        - Staff/admin: sempre pode falar
+        - Usuário dono do ticket: controlado pelo parâmetro locked
+        - Outros adicionados manualmente: controlado pelo parâmetro locked
+        """
+        
+        staff_roles = await self._get_staff_roles(guild.id)
+        
+        # Coleta todos os IDs de roles de staff
+        staff_role_ids = set()
+        for sr in staff_roles:
+            staff_role_ids.add(int(sr["role_id"]))
+        
+        # Admin role
+        for role in guild.roles:
+            if role.permissions.administrator:
+                staff_role_ids.add(role.id)
+        
+        overwrites = {}
+        
+        # @everyone sempre sem acesso
+        overwrites[guild.default_role] = discord.PermissionOverwrite(
+            read_messages=False, send_messages=False
+        )
+        
+        # Bot sempre com acesso total
+        overwrites[guild.me] = discord.PermissionOverwrite(
+            read_messages=True, send_messages=True, manage_channels=True,
+            attach_files=True, embed_links=True, add_reactions=True
+        )
+        
+        # Processa cada overwrite existente
+        for target, overwrite in channel.overwrites.items():
+            if target == guild.default_role or target == guild.me:
+                continue
+            
+            if isinstance(target, discord.Role):
+                if target.id in staff_role_ids:
+                    # Staff role: sempre pode falar
+                    overwrites[target] = discord.PermissionOverwrite(
+                        read_messages=True, send_messages=True
+                    )
+                else:
+                    # Outra role: sem acesso
+                    overwrites[target] = discord.PermissionOverwrite(
+                        read_messages=False, send_messages=False
+                    )
+            
+            elif isinstance(target, discord.Member):
+                # Verifica se o membro é staff
+                is_staff = target.guild_permissions.administrator
+                if not is_staff:
+                    for role in target.roles:
+                        if role.id in staff_role_ids:
+                            is_staff = True
+                            break
+                
+                if is_staff:
+                    # Staff: sempre pode falar
+                    overwrites[target] = discord.PermissionOverwrite(
+                        read_messages=True, send_messages=True
+                    )
+                else:
+                    # Não-staff: controlado pelo parâmetro locked
+                    overwrites[target] = discord.PermissionOverwrite(
+                        read_messages=True, send_messages=not locked
+                    )
+        
+        await channel.edit(overwrites=overwrites)
+        logger.info(f"🔒 Chat {'bloqueado' if locked else 'liberado'} em {channel.name}")
     
     # ═══════════════ REGISTRAR VIEWS NO STARTUP ═══════════════
     
@@ -845,23 +919,18 @@ class Tickets(commands.Cog):
                 
                 is_claimed = ticket_info.get("claimed_by") is not None
                 
-                user_id = ticket_info.get("user_id")
-                user = interaction.guild.get_member(int(user_id)) if user_id else None
+                await self._apply_chat_lock(interaction.channel, interaction.guild, locked=False)
                 
-                if user:
-                    await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
-                    view = TicketControlView(ticket_id, chat_locked=False, claimed=is_claimed)
-                    await interaction.message.edit(view=view)
-                    
-                    embed = discord.Embed(
-                        title="🔓 Chat Liberado",
-                        description=f"O chat foi liberado por {interaction.user.mention}. O usuário já pode enviar mensagens.",
-                        color=discord.Color.blue(),
-                    )
-                    await interaction.channel.send(embed=embed)
-                    await interaction.response.send_message("✅ Chat liberado!", ephemeral=True)
-                else:
-                    await interaction.response.send_message("❌ Usuário não encontrado.", ephemeral=True)
+                view = TicketControlView(ticket_id, chat_locked=False, claimed=is_claimed)
+                await interaction.message.edit(view=view)
+                
+                embed = discord.Embed(
+                    title="🔓 Chat Liberado",
+                    description=f"O chat foi liberado por {interaction.user.mention}.",
+                    color=discord.Color.blue(),
+                )
+                await interaction.channel.send(embed=embed)
+                await interaction.response.send_message("✅ Chat liberado!", ephemeral=True)
             
             # ═════════ LOCK ═════════
             elif custom_id.startswith("ticket_lock_"):
@@ -874,23 +943,18 @@ class Tickets(commands.Cog):
                 
                 is_claimed = ticket_info.get("claimed_by") is not None
                 
-                user_id = ticket_info.get("user_id")
-                user = interaction.guild.get_member(int(user_id)) if user_id else None
+                await self._apply_chat_lock(interaction.channel, interaction.guild, locked=True)
                 
-                if user:
-                    await interaction.channel.set_permissions(user, read_messages=True, send_messages=is_claimed)
-                    view = TicketControlView(ticket_id, chat_locked=True, claimed=True)
-                    await interaction.message.edit(view=view)
-                    
-                    embed = discord.Embed(
-                        title="🔒 Chat Bloqueado",
-                        description=f"O chat foi bloqueado por {interaction.user.mention}.",
-                        color=discord.Color.orange(),
-                    )
-                    await interaction.channel.send(embed=embed)
-                    await interaction.response.send_message("✅ Chat bloqueado!", ephemeral=True)
-                else:
-                    await interaction.response.send_message("❌ Usuário não encontrado.", ephemeral=True)
+                view = TicketControlView(ticket_id, chat_locked=True, claimed=is_claimed)
+                await interaction.message.edit(view=view)
+                
+                embed = discord.Embed(
+                    title="🔒 Chat Bloqueado",
+                    description=f"O chat foi bloqueado por {interaction.user.mention}.",
+                    color=discord.Color.orange(),
+                )
+                await interaction.channel.send(embed=embed)
+                await interaction.response.send_message("✅ Chat bloqueado!", ephemeral=True)
             
             # ═════════ CLAIM ═════════
             elif custom_id.startswith("ticket_claim_"):
