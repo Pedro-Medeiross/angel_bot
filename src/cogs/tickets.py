@@ -783,13 +783,48 @@ class Tickets(commands.Cog):
     async def _transfer_ticket(self, interaction, ticket_id, target_id):
         await interaction.response.defer(ephemeral=True)
         try:
-            new_staff = interaction.guild.get_member(int(target_id))
-            if not new_staff:
-                await interaction.followup.send("❌ Staff não encontrado.", ephemeral=True)
+            # Tenta como ID primeiro
+            member = interaction.guild.get_member(int(target_id))
+            
+            # Se não encontrou, tenta buscar por nome/mention
+            if not member:
+                target_id_clean = target_id.strip().replace("@", "")
+                member = discord.utils.get(interaction.guild.members, name=target_id_clean)
+                if not member:
+                    member = discord.utils.get(interaction.guild.members, display_name=target_id_clean)
+                if not member:
+                    member = interaction.guild.get_member_named(target_id_clean)
+            
+            if not member:
+                await interaction.followup.send("❌ Staff não encontrado. Use ID ou @nome.", ephemeral=True)
                 return
-            await self._api_put(f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/transfer", {"to_staff_id": str(new_staff.id)})
-            await interaction.followup.send(f"✅ Ticket transferido para {new_staff.mention}.", ephemeral=True)
-        except:
+            
+            # Verifica se é staff
+            staff_roles = await self._get_staff_roles(interaction.guild.id)
+            is_staff = member.guild_permissions.administrator
+            if not is_staff:
+                for role in member.roles:
+                    if role.id in [int(sr["role_id"]) for sr in staff_roles]:
+                        is_staff = True
+                        break
+            
+            if not is_staff:
+                await interaction.followup.send("❌ O usuário não é staff.", ephemeral=True)
+                return
+            
+            await self._api_post(
+                f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/bot/transfer",
+                {
+                    "ticket_id": ticket_id,
+                    "from_staff": str(interaction.user.id),
+                    "to_staff": str(member.id),
+                    "reason": "Transferido via painel de controle"
+                }
+            )
+            await interaction.followup.send(f"✅ Ticket transferido para {member.mention}.", ephemeral=True)
+        except ValueError:
+            await interaction.followup.send("❌ ID inválido. Use números ou @nome.", ephemeral=True)
+        except Exception as e:
             await interaction.followup.send("❌ Erro ao transferir.", ephemeral=True)
     
     # ═══════════════ REGISTRAR VIEWS NO STARTUP ═══════════════
