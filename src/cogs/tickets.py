@@ -777,7 +777,7 @@ class Tickets(commands.Cog):
         if priority not in valid:
             await interaction.followup.send(f"❌ Prioridade inválida. Use: {', '.join(valid)}", ephemeral=True)
             return
-        await self._api_put(f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/priority", {"priority": priority})
+        await self._api_put(f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/bot/priority", {"priority": priority})
         await interaction.followup.send(f"✅ Prioridade alterada para **{priority.upper()}**", ephemeral=True)
 
     async def _transfer_ticket(self, interaction, ticket_id, target_id):
