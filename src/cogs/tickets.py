@@ -1096,25 +1096,25 @@ class Tickets(commands.Cog):
                 else:
                     await interaction.response.send_message("❌ Erro ao reivindicar ticket.", ephemeral=True)
             
-            elif custom_id.startswith("ticket_add_"):
-                ticket_id = custom_id.replace("ticket_add_", "")
-                modal = AddMemberModal(ticket_id, self)
-                await interaction.response.send_modal(modal)
+        elif custom_id.startswith("ticket_add_"):
+            ticket_id = custom_id.replace("ticket_add_", "")
+            modal = AddMemberModal(ticket_id, self)
+            await interaction.response.send_modal(modal)
 
-            elif custom_id.startswith("ticket_remove_"):
-                ticket_id = custom_id.replace("ticket_remove_", "")
-                modal = RemoveMemberModal(ticket_id, self)
-                await interaction.response.send_modal(modal)
+        elif custom_id.startswith("ticket_remove_"):
+            ticket_id = custom_id.replace("ticket_remove_", "")
+            modal = RemoveMemberModal(ticket_id, self)
+            await interaction.response.send_modal(modal)
 
-            elif custom_id.startswith("ticket_transfer_"):
-                ticket_id = custom_id.replace("ticket_transfer_", "")
-                modal = TransferTicketModal(ticket_id, self)
-                await interaction.response.send_modal(modal)
+        elif custom_id.startswith("ticket_transfer_"):
+            ticket_id = custom_id.replace("ticket_transfer_", "")
+            modal = TransferTicketModal(ticket_id, self)
+            await interaction.response.send_modal(modal)
 
-            elif custom_id.startswith("ticket_priority_"):
-                ticket_id = custom_id.replace("ticket_priority_", "")
-                modal = PriorityModal(ticket_id, self)
-                await interaction.response.send_modal(modal)
+        elif custom_id.startswith("ticket_priority_"):
+            ticket_id = custom_id.replace("ticket_priority_", "")
+            modal = PriorityModal(ticket_id, self)
+            await interaction.response.send_modal(modal)
                                 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Tickets(bot))
