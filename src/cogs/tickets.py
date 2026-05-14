@@ -1,6 +1,6 @@
 import discord
 import asyncio
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord.ui import View, Button, Modal, TextInput
 import aiohttp
 from typing import Optional
@@ -404,6 +404,7 @@ class Tickets(commands.Cog):
         self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
         self._panel_messages = {}
         self._staff_roles_cache = {}
+        self.auto_close_inactive.start()
         
         logger.info(f"🔧 Tickets inicializado: api_url={self.api_url}")
     
@@ -491,8 +492,14 @@ class Tickets(commands.Cog):
         if user.guild_permissions.administrator:
             return True, "admin"
         
+        # Verifica se usuário pode fechar
         if str(user.id) == str(ticket_info.get("user_id")):
-            return True, "owner"
+            config = await self._api_get(f"/guilds/{interaction.guild.id}/tickets/bot/config")
+            allow_user_close = config.get("allow_user_close", True) if config else True
+            if allow_user_close:
+                return True, "owner"
+            else:
+                return False, "Apenas staff pode fechar tickets."
         
         claimed_by = ticket_info.get("claimed_by")
         if claimed_by and str(user.id) == str(claimed_by):
@@ -503,41 +510,40 @@ class Tickets(commands.Cog):
     async def _apply_ticket_permissions(self, channel, guild, user, claimed_by=None):
         staff_roles = await self._get_staff_roles(guild.id)
         
+        # Busca config de attachments
+        config = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
+        allow_attachments = config.get("allow_attachments", True) if config else True
+        
         base_perms = discord.PermissionOverwrite(
             read_messages=True, send_messages=True,
-            attach_files=True, embed_links=True, add_reactions=True,
-            read_message_history=True, use_external_emojis=True, use_external_stickers=True
+            attach_files=allow_attachments,
+            embed_links=allow_attachments,
+            add_reactions=True,
+            read_message_history=True,
+            use_external_emojis=True,
+            use_external_stickers=True
         )
         
-        # Pega overwrites atuais (não sobrescreve!)
         overwrites = {}
         for target, perm in channel.overwrites.items():
             overwrites[target] = perm
         
-        # Garante que o user tem acesso
         overwrites[user] = base_perms
-        
-        # Garante que o bot tem acesso
         overwrites[guild.me] = discord.PermissionOverwrite(
             read_messages=True, send_messages=True, manage_channels=True,
             attach_files=True, embed_links=True, add_reactions=True
         )
-        
-        # @everyone sem acesso
         overwrites[guild.default_role] = discord.PermissionOverwrite(read_messages=False)
         
-        # Staff com can_view_all
         for sr in staff_roles:
             role = guild.get_role(int(sr["role_id"]))
             if role and sr.get("can_view_all"):
                 overwrites[role] = base_perms
         
-        # Admin
         for role in guild.roles:
             if role.permissions.administrator and role.name != "@everyone":
                 overwrites[role] = base_perms
         
-        # Staff que claimou
         if claimed_by:
             claimed_member = guild.get_member(int(claimed_by))
             if claimed_member:
@@ -559,6 +565,20 @@ class Tickets(commands.Cog):
             return
         
         config_data = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
+        allow_attachments = config_data.get("allow_attachments", True) if config_data else True
+        max_open = config_data.get("max_open_tickets", 5) if config_data else 5
+        
+        if max_open > 0:
+            tickets_data = await self._api_get(f"/guilds/{guild.id}/tickets/bot/list?status=open&user_id={user.id}")
+            open_count = tickets_data.get("total", 0) if tickets_data else 0
+            
+            if open_count >= max_open:
+                await interaction.followup.send(
+                    f"❌ Você já tem {open_count} ticket(s) aberto(s). Limite máximo: {max_open}.",
+                    ephemeral=True
+                )
+                return
+        
         ticket_count = (config_data.get("ticket_counter", 0) + 1) if config_data else 1
         
         category_id = panel_data.get("category_id")
@@ -613,7 +633,12 @@ class Tickets(commands.Cog):
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True, attach_files=True, embed_links=True, add_reactions=True),
-            user: discord.PermissionOverwrite(read_messages=True, send_messages=False)
+            user: discord.PermissionOverwrite(
+                read_messages=True,
+                send_messages=False,
+                attach_files=allow_attachments,
+                embed_links=allow_attachments
+            )
         }
         for sr in staff_roles:
             role = guild.get_role(int(sr["role_id"]))
@@ -948,6 +973,125 @@ class Tickets(commands.Cog):
             except:
                 pass
         logger.info(f"📊 Categoria {category.name} reordenada ({len(channels)} canais)")
+        
+        
+    @tasks.loop(minutes=1)
+    async def auto_close_inactive(self):
+        """Fecha tickets inativos após auto_close_hours"""
+        from datetime import datetime, timezone
+        
+        for guild in self.bot.guilds:
+            config = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
+            if not config:
+                continue
+            
+            auto_close_hours = config.get("auto_close_hours", 0)
+            auto_close_hours = 0.016
+            if auto_close_hours <= 0:
+                continue
+            
+            tickets = await self._api_get(f"/guilds/{guild.id}/tickets/bot/list?status=open")
+            if not tickets:
+                continue
+            
+            now = datetime.now(timezone.utc)
+            
+            for ticket in tickets.get("tickets", []):
+                channel = guild.get_channel(int(ticket["channel_id"]))
+                if not channel:
+                    continue
+                
+                # Busca última mensagem
+                last_msg = None
+                async for msg in channel.history(limit=1):
+                    last_msg = msg
+                    break
+                
+                if not last_msg:
+                    continue
+                
+                # Se passou do tempo, fecha
+                hours_inactive = (now - last_msg.created_at).total_seconds() / 3600
+                if hours_inactive < auto_close_hours:
+                    continue
+                
+                # Gera transcript
+                messages_data = []
+                async for message in channel.history(oldest_first=True, limit=500):
+                    if message.author.bot and message.embeds:
+                        continue
+                    messages_data.append({
+                        "author_name": message.author.display_name,
+                        "author_username": message.author.name,
+                        "author_id": str(message.author.id),
+                        "author_avatar": str(message.author.display_avatar.url),
+                        "content": message.content,
+                        "attachments": [
+                            {"url": a.url, "filename": a.filename, "content_type": a.content_type, "size": a.size}
+                            for a in message.attachments
+                        ],
+                        "stickers": [{"name": s.name, "url": str(s.url)} for s in message.stickers],
+                        "embeds": [
+                            {"title": e.title, "description": e.description, "url": e.url}
+                            for e in message.embeds
+                        ],
+                        "timestamp": message.created_at.isoformat()
+                    })
+                
+                transcript_data = {
+                    "ticket_id": ticket["id"],
+                    "ticket_number": ticket.get("ticket_number", ""),
+                    "guild_id": str(guild.id),
+                    "guild_name": guild.name,
+                    "guild_icon": str(guild.icon.url) if guild.icon else None,
+                    "opened_by_name": ticket.get("user_name", "Desconhecido"),
+                    "opened_by_id": str(ticket.get("user_id", "")),
+                    "opened_at": ticket.get("created_at", ""),
+                    "closed_by_name": str(self.bot.user),
+                    "closed_by_id": str(self.bot.user.id),
+                    "close_reason": f"Fechado automaticamente por inatividade ({auto_close_hours}h)",
+                    "closed_at": discord.utils.utcnow().isoformat(),
+                    "messages": messages_data
+                }
+                
+                async with aiohttp.ClientSession(auth=self.auth) as session:
+                    await session.post(
+                        f"{self.api_url}/guilds/{guild.id}/tickets/{ticket['id']}/transcript",
+                        json=transcript_data
+                    )
+                
+                await self._api_post(
+                    f"/guilds/{guild.id}/tickets/{ticket['id']}/bot/close",
+                    {
+                        "closed_by": str(self.bot.user.id),
+                        "reason": f"Fechado automaticamente por inatividade ({auto_close_hours}h)"
+                    }
+                )
+                
+                # Bloqueia e envia mensagem
+                await channel.set_permissions(guild.default_role, send_messages=False)
+                await channel.set_permissions(guild.me, send_messages=True)
+                
+                embed = discord.Embed(
+                    title="⏰ Ticket Fechado por Inatividade",
+                    description=f"Ticket fechado automaticamente após {auto_close_hours}h sem mensagens.",
+                    color=discord.Color.orange()
+                )
+                await channel.send(embed=embed)
+                
+                await asyncio.sleep(5)
+                try:
+                    await channel.delete()
+                except:
+                    pass
+                logger.info(f"⏰ Ticket {ticket['id']} fechado por inatividade em {guild.name}")
+
+    @auto_close_inactive.before_loop
+    async def before_auto_close(self):
+        await self.bot.wait_until_ready()
+
+    def cog_unload(self):
+        self.auto_close_inactive.cancel()
     
     # ═══════════════ REGISTRAR VIEWS NO STARTUP ═══════════════
     
