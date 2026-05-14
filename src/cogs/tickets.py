@@ -977,6 +977,7 @@ class Tickets(commands.Cog):
         
     @tasks.loop(minutes=1)
     async def auto_close_inactive(self):
+        print(f"⏰ AUTO-CLOSE RODANDO! {discord.utils.utcnow()}")
         """Fecha tickets inativos após auto_close_hours"""
         from datetime import datetime, timezone
         
