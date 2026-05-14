@@ -333,13 +333,21 @@ class Tickets(commands.Cog):
     def _extract_id(self, value: str) -> str:
         """Extrai ID de uma string (menção, ID puro, ou nome)"""
         value = value.strip()
+        logger.info(f"🔍 _extract_id input: '{value}'")
+        
         # Menção: <@123> ou <@!123>
         if value.startswith("<@") and value.endswith(">"):
-            return value.replace("<@!", "").replace("<@", "").replace(">", "").strip()
+            result = value.replace("<@!", "").replace("<@", "").replace(">", "").strip()
+            logger.info(f"🔍 _extract_id mention result: '{result}'")
+            return result
+        
         # Se for só números, retorna como está
         if value.isdigit():
+            logger.info(f"🔍 _extract_id digit result: '{value}'")
             return value
-        # Nome: retorna como está (o método que chama vai buscar por nome)
+        
+        # Nome: retorna como está
+        logger.info(f"🔍 _extract_id name result: '{value}'")
         return value
     
     async def _get_ticket_info(self, guild_id: int, ticket_id: str) -> Optional[dict]:
@@ -794,6 +802,7 @@ class Tickets(commands.Cog):
 
     async def _transfer_ticket(self, interaction, ticket_id, target_id):
         await interaction.response.defer(ephemeral=True)
+        logger.info(f"🔄 _transfer_ticket: ticket={ticket_id} target_id='{target_id}'")
         try:
             # Tenta como ID primeiro
             member = interaction.guild.get_member(int(target_id))
