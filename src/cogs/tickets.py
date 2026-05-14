@@ -261,12 +261,16 @@ class PrioritySelect(discord.ui.Select):
         
         # Reordena o canal
         channel = interaction.channel
-        priority_positions = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
-        target_pos = priority_positions.get(priority, 3)
-        try:
-            await channel.edit(position=target_pos)
-        except:
-            pass
+        if channel.category:
+            last_position = -1
+            for ch in channel.category.channels:
+                if ch.id != channel.id:
+                    last_position = max(last_position, ch.position)
+            if last_position >= 0:
+                try:
+                    await channel.edit(position=last_position + 1)
+                except:
+                    pass
         
         await interaction.response.send_message(f"✅ Prioridade alterada para **{priority.upper()}**", ephemeral=True)
 
@@ -627,18 +631,21 @@ class Tickets(commands.Cog):
         await channel.edit(overwrites=overwrites)
         
         # Ordena por prioridade (após permissões)
-        priority_positions = {
-            "bug": 0, "denuncia": 0,
-            "contribuidor": 1, "financeiro": 1,
-            "influencer": 2, "duvida": 2, "suporte": 2,
-            "outro": 3,
-        }
+        priority_order = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
         if category:
-            target_pos = priority_positions.get(category_key, 3)
-            try:
-                await channel.edit(position=target_pos)
-            except:
-                pass
+            # Encontra o último canal com a mesma prioridade ou maior
+            last_position = -1
+            for ch in category.channels:
+                ch_priority = priority_order.get("medium", 3)  # fallback
+                if ch.id != channel.id:
+                    last_position = max(last_position, ch.position)
+            
+            # Coloca o novo canal abaixo do último encontrado
+            if last_position >= 0:
+                try:
+                    await channel.edit(position=last_position + 1)
+                except:
+                    pass
         
         # Embed
         embed = discord.Embed(
@@ -921,13 +928,17 @@ class Tickets(commands.Cog):
             return
         await self._api_put(f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/bot/priority", {"priority": priority})
         
-        # Reordena o canal
-        priority_positions = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
-        target_pos = priority_positions.get(priority, 3)
-        try:
-            await interaction.channel.edit(position=target_pos)
-        except:
-            pass
+        channel = interaction.channel
+        if channel.category:
+            last_position = -1
+            for ch in channel.category.channels:
+                if ch.id != channel.id:
+                    last_position = max(last_position, ch.position)
+            if last_position >= 0:
+                try:
+                    await channel.edit(position=last_position + 1)
+                except:
+                    pass
         
         await interaction.followup.send(f"✅ Prioridade alterada para **{priority.upper()}**", ephemeral=True)
     
