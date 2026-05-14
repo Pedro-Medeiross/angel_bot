@@ -83,7 +83,7 @@ class AddMemberModal(Modal):
         self.add_item(self.target)
     
     async def on_submit(self, interaction: discord.Interaction):
-        target_id = self.target.value.strip().replace("<@", "").replace(">", "").replace("!", "")
+        target_id = self.cog._extract_id(self.target.value)
         await self.cog._add_member(interaction, self.ticket_id, target_id)
 
 class RemoveMemberModal(Modal):
@@ -95,7 +95,7 @@ class RemoveMemberModal(Modal):
         self.add_item(self.target)
     
     async def on_submit(self, interaction: discord.Interaction):
-        target_id = self.target.value.strip().replace("<@", "").replace(">", "").replace("!", "")
+        target_id = self.cog._extract_id(self.target.value)
         await self.cog._remove_member(interaction, self.ticket_id, target_id)
 
 class TransferTicketModal(Modal):
@@ -107,7 +107,7 @@ class TransferTicketModal(Modal):
         self.add_item(self.target)
     
     async def on_submit(self, interaction: discord.Interaction):
-        target_id = self.target.value.strip().replace("<@", "").replace(">", "").replace("!", "")
+        target_id = self.cog._extract_id(self.target.value)
         await self.cog._transfer_ticket(interaction, self.ticket_id, target_id)
 
 class PriorityModal(Modal):
@@ -329,6 +329,18 @@ class Tickets(commands.Cog):
                 except discord.NotFound:
                     pass
         return None
+    
+    def _extract_id(self, value: str) -> str:
+        """Extrai ID de uma string (menção, ID puro, ou nome)"""
+        value = value.strip()
+        # Menção: <@123> ou <@!123>
+        if value.startswith("<@") and value.endswith(">"):
+            return value.replace("<@!", "").replace("<@", "").replace(">", "").strip()
+        # Se for só números, retorna como está
+        if value.isdigit():
+            return value
+        # Nome: retorna como está (o método que chama vai buscar por nome)
+        return value
     
     async def _get_ticket_info(self, guild_id: int, ticket_id: str) -> Optional[dict]:
         return await self._api_get(f"/guilds/{guild_id}/tickets/bot/{ticket_id}")
