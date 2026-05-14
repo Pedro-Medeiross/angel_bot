@@ -258,6 +258,16 @@ class PrioritySelect(discord.ui.Select):
             f"/guilds/{interaction.guild.id}/tickets/{self.ticket_id}/bot/priority",
             {"priority": priority}
         )
+        
+        # Reordena o canal
+        channel = interaction.channel
+        priority_positions = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+        target_pos = priority_positions.get(priority, 3)
+        try:
+            await channel.edit(position=target_pos)
+        except:
+            pass
+        
         await interaction.response.send_message(f"✅ Prioridade alterada para **{priority.upper()}**", ephemeral=True)
 
 class PriorityView(View):
@@ -569,13 +579,28 @@ class Tickets(commands.Cog):
             await interaction.followup.send("❌ Não tenho permissão para criar canais.", ephemeral=True)
             return
         
+        category_priority = {
+            "bug": "urgent",
+            "denuncia": "urgent",
+            "contribuidor": "high",
+            "financeiro": "high",
+            "influencer": "medium",
+            "duvida": "medium",
+            "suporte": "medium",
+            "outro": "low",
+        }
+
+        priority = category_priority.get(category_key, "medium")
+
+        
         result = await self._api_post(f"/guilds/{guild.id}/tickets/open", {
             "user_id": str(user.id),
             "channel_id": str(channel.id),
             "panel_id": panel_id,
             "subject": subject,
             "description": description,
-            "category": category_key
+            "category": category_key,
+            "priority": priority,
         })
         
         if not result:
@@ -892,9 +917,18 @@ class Tickets(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         valid = ["urgent", "high", "medium", "low"]
         if priority not in valid:
-            await interaction.followup.send(f"❌ Prioridade inválida. Use: {', '.join(valid)}", ephemeral=True)
+            await interaction.followup.send(f"❌ Prioridade inválida.", ephemeral=True)
             return
         await self._api_put(f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/bot/priority", {"priority": priority})
+        
+        # Reordena o canal
+        priority_positions = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+        target_pos = priority_positions.get(priority, 3)
+        try:
+            await interaction.channel.edit(position=target_pos)
+        except:
+            pass
+        
         await interaction.followup.send(f"✅ Prioridade alterada para **{priority.upper()}**", ephemeral=True)
     
     # ═══════════════ REGISTRAR VIEWS NO STARTUP ═══════════════
