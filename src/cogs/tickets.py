@@ -982,39 +982,48 @@ class Tickets(commands.Cog):
         from datetime import datetime, timezone
         
         for guild in self.bot.guilds:
+            print(f"⏰ Verificando guild: {guild.name}")
             config = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
             if not config:
+                print(f"⏰ Sem config para {guild.name}")
                 continue
             
-            auto_close_hours = config.get("auto_close_hours", 0)
             auto_close_hours = 0.016
+            print(f"⏰ auto_close_hours={auto_close_hours}")
+            
             if auto_close_hours <= 0:
                 continue
             
             tickets = await self._api_get(f"/guilds/{guild.id}/tickets/bot/list?status=open")
             if not tickets:
+                print(f"⏰ Sem tickets abertos em {guild.name}")
                 continue
             
-            now = datetime.now(timezone.utc)
+            print(f"⏰ {len(tickets.get('tickets', []))} tickets abertos em {guild.name}")
             
             for ticket in tickets.get("tickets", []):
                 channel = guild.get_channel(int(ticket["channel_id"]))
                 if not channel:
+                    print(f"⏰ Canal não encontrado: {ticket['channel_id']}")
                     continue
                 
-                # Busca última mensagem
                 last_msg = None
                 async for msg in channel.history(limit=1):
                     last_msg = msg
                     break
                 
                 if not last_msg:
+                    print(f"⏰ Sem mensagens no canal {channel.name}")
                     continue
                 
-                # Se passou do tempo, fecha
                 hours_inactive = (now - last_msg.created_at).total_seconds() / 3600
+                print(f"⏰ Ticket {ticket['id']}: inactive={hours_inactive:.4f}h ({last_msg.created_at})")
+                
                 if hours_inactive < auto_close_hours:
+                    print(f"⏰ Não expirou ainda")
                     continue
+                
+                print(f"⏰ FECHANDO! {ticket['id']}")
                 
                 # Gera transcript
                 messages_data = []
