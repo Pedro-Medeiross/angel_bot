@@ -55,8 +55,10 @@ class TicketControlView(View):
             self.add_item(Button(label="Prioridade", style=discord.ButtonStyle.primary, custom_id=f"ticket_priority_{ticket_id}", emoji="⚠️", row=0))
             self.add_item(Button(label="Transferir", style=discord.ButtonStyle.primary, custom_id=f"ticket_transfer_{ticket_id}", emoji="🔄", row=0))
             self.add_item(Button(label="Add Membro", style=discord.ButtonStyle.success, custom_id=f"ticket_add_{ticket_id}", emoji="➕", row=1))
-            self.add_item(Button(label="Remover", style=discord.ButtonStyle.danger, custom_id=f"ticket_remove_{ticket_id}", emoji="➖", row=1))
-            self.add_item(Button(label="Fechar", style=discord.ButtonStyle.danger, custom_id=f"ticket_close_{ticket_id}", emoji="🔒", row=1))
+            self.add_item(Button(label="Add Cargo", style=discord.ButtonStyle.success, custom_id=f"ticket_addrole_{ticket_id}", emoji="👔", row=1))
+            self.add_item(Button(label="Remover Membro", style=discord.ButtonStyle.danger, custom_id=f"ticket_remove_{ticket_id}", emoji="➖", row=2))
+            self.add_item(Button(label="Remover Cargo", style=discord.ButtonStyle.danger, custom_id=f"ticket_removerole_{ticket_id}", emoji="👔", row=2))
+            self.add_item(Button(label="Fechar", style=discord.ButtonStyle.danger, custom_id=f"ticket_close_{ticket_id}", emoji="🔒", row=3))
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
@@ -92,6 +94,13 @@ class UserSelectCustom(discord.ui.UserSelect):
         if isinstance(member, discord.Member):
             await interaction.channel.set_permissions(member, read_messages=True, send_messages=True)
             await interaction.response.send_message(f"✅ {member.mention} adicionado ao ticket.", ephemeral=True)
+            # Avisa no chat
+            embed = discord.Embed(
+                title="➕ Membro Adicionado",
+                description=f"{member.mention} foi adicionado ao ticket por {interaction.user.mention}.",
+                color=discord.Color.green()
+            )
+            await interaction.channel.send(embed=embed)
         else:
             await interaction.response.send_message("❌ Usuário não encontrado no servidor.", ephemeral=True)
 
@@ -108,13 +117,85 @@ class RemoveUserSelect(discord.ui.UserSelect):
     
     async def callback(self, interaction: discord.Interaction):
         member = self.values[0]
+        
+        # Verifica se o membro está no canal
+        overwrite = interaction.channel.overwrites_for(member)
+        if overwrite.is_empty() or not overwrite.read_messages:
+            await interaction.response.send_message("❌ Este usuário não está no ticket.", ephemeral=True)
+            return
+        
         if member.guild_permissions.administrator:
             await interaction.response.send_message("❌ Não pode remover administrador.", ephemeral=True)
             return
+        
         if isinstance(member, discord.Member):
             await interaction.channel.set_permissions(member, overwrite=None)
             await interaction.response.send_message(f"✅ {member.mention} removido do ticket.", ephemeral=True)
+            # Avisa no chat
+            embed = discord.Embed(
+                title="➖ Membro Removido",
+                description=f"{member.mention} foi removido do ticket por {interaction.user.mention}.",
+                color=discord.Color.orange()
+            )
+            await interaction.channel.send(embed=embed)
+            
+class AddRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, ticket_id: str, cog):
+        self.ticket_id = ticket_id
+        self.cog = cog
+        super().__init__(placeholder="Selecione um cargo para adicionar...", min_values=1, max_values=1)
+    
+    async def callback(self, interaction: discord.Interaction):
+        role = self.values[0]
+        if role.permissions.administrator:
+            await interaction.response.send_message("❌ Não pode adicionar cargo de administrador.", ephemeral=True)
+            return
+        
+        await interaction.channel.set_permissions(role, read_messages=True, send_messages=True)
+        await interaction.response.send_message(f"✅ Cargo {role.mention} adicionado ao ticket.", ephemeral=True)
+        
+        embed = discord.Embed(
+            title="➕ Cargo Adicionado",
+            description=f"Cargo {role.mention} foi adicionado ao ticket por {interaction.user.mention}.",
+            color=discord.Color.green()
+        )
+        await interaction.channel.send(embed=embed)
 
+class AddRoleView(View):
+    def __init__(self, ticket_id: str, cog):
+        super().__init__(timeout=120)
+        self.add_item(AddRoleSelect(ticket_id, cog))
+
+class RemoveRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, ticket_id: str, cog):
+        self.ticket_id = ticket_id
+        self.cog = cog
+        super().__init__(placeholder="Selecione um cargo para remover...", min_values=1, max_values=1)
+    
+    async def callback(self, interaction: discord.Interaction):
+        role = self.values[0]
+        
+        # Verifica se o cargo está no canal
+        overwrite = interaction.channel.overwrites_for(role)
+        if overwrite.is_empty() or not overwrite.read_messages:
+            await interaction.response.send_message("❌ Este cargo não está no ticket.", ephemeral=True)
+            return
+        
+        await interaction.channel.set_permissions(role, overwrite=None)
+        await interaction.response.send_message(f"✅ Cargo {role.mention} removido do ticket.", ephemeral=True)
+        
+        embed = discord.Embed(
+            title="➖ Cargo Removido",
+            description=f"Cargo {role.mention} foi removido do ticket por {interaction.user.mention}.",
+            color=discord.Color.orange()
+        )
+        await interaction.channel.send(embed=embed)
+
+class RemoveRoleView(View):
+    def __init__(self, ticket_id: str, cog):
+        super().__init__(timeout=120)
+        self.add_item(RemoveRoleSelect(ticket_id, cog))
+            
 class TransferSelectView(View):
     def __init__(self, ticket_id: str, cog):
         super().__init__(timeout=120)
@@ -150,6 +231,13 @@ class StaffSelect(discord.ui.UserSelect):
             {"to_staff_id": str(member.id)}
         )
         await interaction.response.send_message(f"✅ Ticket transferido para {member.mention}.", ephemeral=True)
+        # Avisa no chat
+        embed = discord.Embed(
+            title="🔄 Ticket Transferido",
+            description=f"Ticket transferido para {member.mention} por {interaction.user.mention}.",
+            color=discord.Color.blue()
+        )
+        await interaction.channel.send(embed=embed)
 
 class PrioritySelect(discord.ui.Select):
     def __init__(self, ticket_id: str, cog):
@@ -1132,6 +1220,16 @@ class Tickets(commands.Cog):
             ticket_id = custom_id.replace("ticket_priority_", "")
             view = PriorityView(ticket_id, self)
             await interaction.response.send_message("⚠️ Selecione a nova prioridade:", view=view, ephemeral=True)
+        
+        elif custom_id.startswith("ticket_addrole_"):
+            ticket_id = custom_id.replace("ticket_addrole_", "")
+            view = AddRoleView(ticket_id, self)
+            await interaction.response.send_message("👔 Selecione um cargo para adicionar:", view=view, ephemeral=True)
+
+        elif custom_id.startswith("ticket_removerole_"):
+            ticket_id = custom_id.replace("ticket_removerole_", "")
+            view = RemoveRoleView(ticket_id, self)
+            await interaction.response.send_message("👔 Selecione um cargo para remover:", view=view, ephemeral=True)
                                 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Tickets(bot))
