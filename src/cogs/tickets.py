@@ -994,14 +994,18 @@ class Tickets(commands.Cog):
             if auto_close_hours <= 0:
                 continue
             
-            tickets = await self._api_get(f"/guilds/{guild.id}/tickets/bot/list?status=open")
-            if not tickets:
-                print(f"⏰ Sem tickets abertos em {guild.name}")
-                continue
-            
-            print(f"⏰ {len(tickets.get('tickets', []))} tickets abertos em {guild.name}")
-            
-            for ticket in tickets.get("tickets", []):
+            all_tickets = []
+            open_tickets = await self._api_get(f"/guilds/{guild.id}/tickets/bot/list?status=open")
+            if open_tickets:
+                all_tickets.extend(open_tickets.get("tickets", []))
+
+            claimed_tickets = await self._api_get(f"/guilds/{guild.id}/tickets/bot/list?status=claimed")
+            if claimed_tickets:
+                all_tickets.extend(claimed_tickets.get("tickets", []))
+
+            print(f"⏰ {len(all_tickets)} tickets abertos/claimados em {guild.name}")
+
+            for ticket in all_tickets:
                 channel = guild.get_channel(int(ticket["channel_id"]))
                 if not channel:
                     print(f"⏰ Canal não encontrado: {ticket['channel_id']}")
