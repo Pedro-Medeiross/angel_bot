@@ -830,7 +830,8 @@ class Tickets(commands.Cog):
             
             await self._api_post(
                 f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/bot/transfer",
-                {"to_staff_id": str(member.id)}
+                {"to_staff_id": str(member.id),
+                 "reason": "Transferido via painel"}
             )
             await interaction.followup.send(f"✅ Ticket transferido para {member.mention}.", ephemeral=True)
         except ValueError:
