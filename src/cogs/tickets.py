@@ -333,21 +333,17 @@ class Tickets(commands.Cog):
     def _extract_id(self, value: str) -> str:
         """Extrai ID de uma string (menção, ID puro, ou nome)"""
         value = value.strip()
-        print(f"🔍 _extract_id input: '{value}'")
         
         # Menção: <@123> ou <@!123>
         if value.startswith("<@") and value.endswith(">"):
             result = value.replace("<@!", "").replace("<@", "").replace(">", "").strip()
-            print(f"🔍 _extract_id mention result: '{result}'")
             return result
         
         # Se for só números, retorna como está
         if value.isdigit():
-            print(f"🔍 _extract_id digit result: '{value}'")
             return value
         
         # Nome: retorna como está
-        print(f"🔍 _extract_id name result: '{value}'")
         return value
     
     async def _get_ticket_info(self, guild_id: int, ticket_id: str) -> Optional[dict]:
@@ -802,7 +798,6 @@ class Tickets(commands.Cog):
 
     async def _transfer_ticket(self, interaction, ticket_id, target_id):
         await interaction.response.defer(ephemeral=True)
-        print(f"🔄 TRANSFER: ticket={ticket_id} target_id='{target_id}' len={len(target_id)}")
         try:
             # Tenta como ID primeiro
             member = interaction.guild.get_member(int(target_id))
@@ -817,7 +812,7 @@ class Tickets(commands.Cog):
                     member = interaction.guild.get_member_named(target_id_clean)
             
             if not member:
-                await interaction.followup.send("❌ Staff não encontrado. Use ID ou @nome.", ephemeral=True)
+                await interaction.followup.send("❌ Staff não encontrado.", ephemeral=True)
                 return
             
             # Verifica se é staff
@@ -835,16 +830,11 @@ class Tickets(commands.Cog):
             
             await self._api_post(
                 f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/bot/transfer",
-                {
-                    "ticket_id": ticket_id,
-                    "from_staff": str(interaction.user.id),
-                    "to_staff": str(member.id),
-                    "reason": "Transferido via painel de controle"
-                }
+                {"to_staff_id": str(member.id)}
             )
             await interaction.followup.send(f"✅ Ticket transferido para {member.mention}.", ephemeral=True)
         except ValueError:
-            await interaction.followup.send("❌ ID inválido. Use números ou @nome.", ephemeral=True)
+            await interaction.followup.send("❌ ID inválido.", ephemeral=True)
         except Exception as e:
             await interaction.followup.send("❌ Erro ao transferir.", ephemeral=True)
     
