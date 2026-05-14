@@ -74,53 +74,109 @@ class TicketControlView(View):
         await interaction.response.send_message("❌ Apenas staff pode usar este botão.", ephemeral=True)
         return False
     
-class AddMemberModal(Modal):
+class AddMemberView(View):
     def __init__(self, ticket_id: str, cog):
-        super().__init__(title="Adicionar Membro")
+        super().__init__(timeout=120)
         self.ticket_id = ticket_id
         self.cog = cog
-        self.target = TextInput(label="ID ou @menção do usuário", placeholder="123456789 ou @usuario", required=True, max_length=100)
-        self.add_item(self.target)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        target_id = self.cog._extract_id(self.target.value)
-        await self.cog._add_member(interaction, self.ticket_id, target_id)
+        self.add_item(UserSelectCustom(ticket_id, cog))
 
-class RemoveMemberModal(Modal):
+class UserSelectCustom(discord.ui.UserSelect):
     def __init__(self, ticket_id: str, cog):
-        super().__init__(title="Remover Membro")
         self.ticket_id = ticket_id
         self.cog = cog
-        self.target = TextInput(label="ID ou @menção do usuário", placeholder="123456789 ou @usuario", required=True, max_length=100)
-        self.add_item(self.target)
+        super().__init__(placeholder="Selecione um usuário para adicionar...", min_values=1, max_values=1)
     
-    async def on_submit(self, interaction: discord.Interaction):
-        target_id = self.cog._extract_id(self.target.value)
-        await self.cog._remove_member(interaction, self.ticket_id, target_id)
+    async def callback(self, interaction: discord.Interaction):
+        member = self.values[0]
+        if isinstance(member, discord.Member):
+            await interaction.channel.set_permissions(member, read_messages=True, send_messages=True)
+            await interaction.response.send_message(f"✅ {member.mention} adicionado ao ticket.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Usuário não encontrado no servidor.", ephemeral=True)
 
-class TransferTicketModal(Modal):
+class RemoveMemberView(View):
     def __init__(self, ticket_id: str, cog):
-        super().__init__(title="Transferir Ticket")
+        super().__init__(timeout=120)
+        self.add_item(RemoveUserSelect(ticket_id, cog))
+
+class RemoveUserSelect(discord.ui.UserSelect):
+    def __init__(self, ticket_id: str, cog):
         self.ticket_id = ticket_id
         self.cog = cog
-        self.target = TextInput(label="ID ou @menção do staff", placeholder="123456789 ou @staff", required=True, max_length=100)
-        self.add_item(self.target)
+        super().__init__(placeholder="Selecione um usuário para remover...", min_values=1, max_values=1)
     
-    async def on_submit(self, interaction: discord.Interaction):
-        target_id = self.cog._extract_id(self.target.value)
-        await self.cog._transfer_ticket(interaction, self.ticket_id, target_id)
+    async def callback(self, interaction: discord.Interaction):
+        member = self.values[0]
+        if member.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Não pode remover administrador.", ephemeral=True)
+            return
+        if isinstance(member, discord.Member):
+            await interaction.channel.set_permissions(member, overwrite=None)
+            await interaction.response.send_message(f"✅ {member.mention} removido do ticket.", ephemeral=True)
 
-class PriorityModal(Modal):
+class TransferSelectView(View):
     def __init__(self, ticket_id: str, cog):
-        super().__init__(title="Mudar Prioridade")
+        super().__init__(timeout=120)
+        self.add_item(StaffSelect(ticket_id, cog))
+
+class StaffSelect(discord.ui.UserSelect):
+    def __init__(self, ticket_id: str, cog):
         self.ticket_id = ticket_id
         self.cog = cog
-        self.priority = TextInput(label="Prioridade", placeholder="urgent, high, medium, low", required=True, max_length=10)
-        self.add_item(self.priority)
+        super().__init__(placeholder="Selecione um staff para transferir...", min_values=1, max_values=1)
     
-    async def on_submit(self, interaction: discord.Interaction):
-        await self.cog._change_priority(interaction, self.ticket_id, self.priority.value.lower())
+    async def callback(self, interaction: discord.Interaction):
+        member = self.values[0]
+        if not isinstance(member, discord.Member):
+            await interaction.response.send_message("❌ Usuário não encontrado.", ephemeral=True)
+            return
+        
+        # Verifica se é staff
+        staff_roles = await self.cog._get_staff_roles(interaction.guild.id)
+        is_staff = member.guild_permissions.administrator
+        if not is_staff:
+            for role in member.roles:
+                if role.id in [int(sr["role_id"]) for sr in staff_roles]:
+                    is_staff = True
+                    break
+        
+        if not is_staff:
+            await interaction.response.send_message("❌ O usuário não é staff.", ephemeral=True)
+            return
+        
+        await self.cog._api_post(
+            f"/guilds/{interaction.guild.id}/tickets/{self.ticket_id}/bot/transfer",
+            {"to_staff_id": str(member.id)}
+        )
+        await interaction.response.send_message(f"✅ Ticket transferido para {member.mention}.", ephemeral=True)
 
+class PrioritySelect(discord.ui.Select):
+    def __init__(self, ticket_id: str, cog):
+        self.ticket_id = ticket_id
+        self.cog = cog
+        
+        options = [
+            discord.SelectOption(label="🔴 Urgente", value="urgent", emoji="🔴"),
+            discord.SelectOption(label="🟠 Alta", value="high", emoji="🟠"),
+            discord.SelectOption(label="🟡 Média", value="medium", emoji="🟡"),
+            discord.SelectOption(label="🟢 Baixa", value="low", emoji="🟢"),
+        ]
+        super().__init__(placeholder="Selecione a nova prioridade...", options=options)
+    
+    async def callback(self, interaction: discord.Interaction):
+        priority = self.values[0]
+        await self.cog._api_put(
+            f"/guilds/{interaction.guild.id}/tickets/{self.ticket_id}/bot/priority",
+            {"priority": priority}
+        )
+        await interaction.response.send_message(f"✅ Prioridade alterada para **{priority.upper()}**", ephemeral=True)
+
+class PriorityView(View):
+    def __init__(self, ticket_id: str, cog):
+        super().__init__(timeout=60)
+        self.add_item(PrioritySelect(ticket_id, cog))
+        
 class CloseTicketModal(Modal):
     """Modal pedindo motivo do fechamento"""
     
@@ -329,22 +385,6 @@ class Tickets(commands.Cog):
                 except discord.NotFound:
                     pass
         return None
-    
-    def _extract_id(self, value: str) -> str:
-        """Extrai ID de uma string (menção, ID puro, ou nome)"""
-        value = value.strip()
-        
-        # Menção: <@123> ou <@!123>
-        if value.startswith("<@") and value.endswith(">"):
-            result = value.replace("<@!", "").replace("<@", "").replace(">", "").strip()
-            return result
-        
-        # Se for só números, retorna como está
-        if value.isdigit():
-            return value
-        
-        # Nome: retorna como está
-        return value
     
     async def _get_ticket_info(self, guild_id: int, ticket_id: str) -> Optional[dict]:
         return await self._api_get(f"/guilds/{guild_id}/tickets/bot/{ticket_id}")
@@ -759,33 +799,6 @@ class Tickets(commands.Cog):
         
         await channel.edit(overwrites=overwrites)
         logger.info(f"🔒 Chat {'bloqueado' if locked else 'liberado'} em {channel.name}")
-        
-    async def _add_member(self, interaction, ticket_id, target_id):
-        await interaction.response.defer(ephemeral=True)
-        try:
-            member = interaction.guild.get_member(int(target_id))
-            if not member:
-                await interaction.followup.send("❌ Usuário não encontrado.", ephemeral=True)
-                return
-            await interaction.channel.set_permissions(member, read_messages=True, send_messages=True)
-            await interaction.followup.send(f"✅ {member.mention} adicionado ao ticket.", ephemeral=True)
-        except:
-            await interaction.followup.send("❌ Erro ao adicionar membro.", ephemeral=True)
-
-    async def _remove_member(self, interaction, ticket_id, target_id):
-        await interaction.response.defer(ephemeral=True)
-        try:
-            member = interaction.guild.get_member(int(target_id))
-            if not member:
-                await interaction.followup.send("❌ Usuário não encontrado.", ephemeral=True)
-                return
-            if member.guild_permissions.administrator:
-                await interaction.followup.send("❌ Não pode remover administrador.", ephemeral=True)
-                return
-            await interaction.channel.set_permissions(member, overwrite=None)
-            await interaction.followup.send(f"✅ {member.mention} removido do ticket.", ephemeral=True)
-        except:
-            await interaction.followup.send("❌ Erro ao remover membro.", ephemeral=True)
 
     async def _change_priority(self, interaction, ticket_id, priority):
         await interaction.response.defer(ephemeral=True)
@@ -795,49 +808,6 @@ class Tickets(commands.Cog):
             return
         await self._api_put(f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/bot/priority", {"priority": priority})
         await interaction.followup.send(f"✅ Prioridade alterada para **{priority.upper()}**", ephemeral=True)
-
-    async def _transfer_ticket(self, interaction, ticket_id, target_id):
-        await interaction.response.defer(ephemeral=True)
-        try:
-            # Tenta como ID primeiro
-            member = interaction.guild.get_member(int(target_id))
-            
-            # Se não encontrou, tenta buscar por nome/mention
-            if not member:
-                target_id_clean = target_id.strip().replace("@", "")
-                member = discord.utils.get(interaction.guild.members, name=target_id_clean)
-                if not member:
-                    member = discord.utils.get(interaction.guild.members, display_name=target_id_clean)
-                if not member:
-                    member = interaction.guild.get_member_named(target_id_clean)
-            
-            if not member:
-                await interaction.followup.send("❌ Staff não encontrado.", ephemeral=True)
-                return
-            
-            # Verifica se é staff
-            staff_roles = await self._get_staff_roles(interaction.guild.id)
-            is_staff = member.guild_permissions.administrator
-            if not is_staff:
-                for role in member.roles:
-                    if role.id in [int(sr["role_id"]) for sr in staff_roles]:
-                        is_staff = True
-                        break
-            
-            if not is_staff:
-                await interaction.followup.send("❌ O usuário não é staff.", ephemeral=True)
-                return
-            
-            await self._api_post(
-                f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/bot/transfer",
-                {"to_staff_id": str(member.id),
-                 "reason": "Transferido via painel"}
-            )
-            await interaction.followup.send(f"✅ Ticket transferido para {member.mention}.", ephemeral=True)
-        except ValueError:
-            await interaction.followup.send("❌ ID inválido.", ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send("❌ Erro ao transferir.", ephemeral=True)
     
     # ═══════════════ REGISTRAR VIEWS NO STARTUP ═══════════════
     
@@ -1145,23 +1115,23 @@ class Tickets(commands.Cog):
             
         elif custom_id.startswith("ticket_add_"):
             ticket_id = custom_id.replace("ticket_add_", "")
-            modal = AddMemberModal(ticket_id, self)
-            await interaction.response.send_modal(modal)
+            view = AddMemberView(ticket_id, self)
+            await interaction.response.send_message("👤 Selecione um usuário para adicionar:", view=view, ephemeral=True)
 
         elif custom_id.startswith("ticket_remove_"):
             ticket_id = custom_id.replace("ticket_remove_", "")
-            modal = RemoveMemberModal(ticket_id, self)
-            await interaction.response.send_modal(modal)
+            view = RemoveMemberView(ticket_id, self)
+            await interaction.response.send_message("👤 Selecione um usuário para remover:", view=view, ephemeral=True)
 
         elif custom_id.startswith("ticket_transfer_"):
             ticket_id = custom_id.replace("ticket_transfer_", "")
-            modal = TransferTicketModal(ticket_id, self)
-            await interaction.response.send_modal(modal)
+            view = TransferSelectView(ticket_id, self)
+            await interaction.response.send_message("🔄 Selecione um staff para transferir:", view=view, ephemeral=True)
 
         elif custom_id.startswith("ticket_priority_"):
             ticket_id = custom_id.replace("ticket_priority_", "")
-            modal = PriorityModal(ticket_id, self)
-            await interaction.response.send_modal(modal)
+            view = PriorityView(ticket_id, self)
+            await interaction.response.send_message("⚠️ Selecione a nova prioridade:", view=view, ephemeral=True)
                                 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Tickets(bot))
