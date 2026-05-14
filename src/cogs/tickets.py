@@ -260,17 +260,11 @@ class PrioritySelect(discord.ui.Select):
         )
         
         # Reordena o canal
+        priority_order = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+        new_priority_level = priority_order.get(priority, 2)
         channel = interaction.channel
         if channel.category:
-            last_position = -1
-            for ch in channel.category.channels:
-                if ch.id != channel.id:
-                    last_position = max(last_position, ch.position)
-            if last_position >= 0:
-                try:
-                    await channel.edit(position=last_position + 1)
-                except:
-                    pass
+            await self.cog._reorder_category(channel.category)
         
         await interaction.response.send_message(f"✅ Prioridade alterada para **{priority.upper()}**", ephemeral=True)
 
@@ -572,17 +566,6 @@ class Tickets(commands.Cog):
         
         channel_name = f"ticket-{ticket_count:04d}-{user.name}"
         
-        try:
-            channel = await guild.create_text_channel(
-                name=channel_name,
-                category=category,
-                topic=f"Ticket #{ticket_count} de {user.name} | {subject}",
-                reason=f"Ticket aberto por {user.name}"
-            )
-        except discord.Forbidden:
-            await interaction.followup.send("❌ Não tenho permissão para criar canais.", ephemeral=True)
-            return
-        
         category_priority = {
             "bug": "urgent",
             "denuncia": "urgent",
@@ -595,7 +578,18 @@ class Tickets(commands.Cog):
         }
 
         priority = category_priority.get(category_key, "medium")
-
+        
+        topic = f"Ticket #{ticket_count} de {user.name} | {subject} | priority:{priority}"
+        try:
+            channel = await guild.create_text_channel(
+                name=channel_name,
+                category=category,
+                topic=topic,
+                reason=f"Ticket aberto por {user.name}"
+            )
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Não tenho permissão para criar canais.", ephemeral=True)
+            return
         
         result = await self._api_post(f"/guilds/{guild.id}/tickets/open", {
             "user_id": str(user.id),
@@ -630,22 +624,9 @@ class Tickets(commands.Cog):
                 overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
         await channel.edit(overwrites=overwrites)
         
-        # Ordena por prioridade (após permissões)
-        priority_order = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+        # Ordena por prioridade - agrupado por nível
         if category:
-            # Encontra o último canal com a mesma prioridade ou maior
-            last_position = -1
-            for ch in category.channels:
-                ch_priority = priority_order.get("medium", 3)  # fallback
-                if ch.id != channel.id:
-                    last_position = max(last_position, ch.position)
-            
-            # Coloca o novo canal abaixo do último encontrado
-            if last_position >= 0:
-                try:
-                    await channel.edit(position=last_position + 1)
-                except:
-                    pass
+            await self._reorder_category(category)
         
         # Embed
         embed = discord.Embed(
@@ -928,19 +909,45 @@ class Tickets(commands.Cog):
             return
         await self._api_put(f"/guilds/{interaction.guild.id}/tickets/{ticket_id}/bot/priority", {"priority": priority})
         
+        priority_order = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+        new_priority_level = priority_order.get(priority, 2)
         channel = interaction.channel
         if channel.category:
-            last_position = -1
-            for ch in channel.category.channels:
-                if ch.id != channel.id:
-                    last_position = max(last_position, ch.position)
-            if last_position >= 0:
-                try:
-                    await channel.edit(position=last_position + 1)
-                except:
-                    pass
+            await self._reorder_category(channel.category)
         
         await interaction.followup.send(f"✅ Prioridade alterada para **{priority.upper()}**", ephemeral=True)
+        
+        
+    async def _reorder_category(self, category):
+        """Reordena todos os canais da categoria por prioridade + data (mais antigo primeiro)"""
+        if not category:
+            return
+        
+        priority_order = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+        
+        channels = [ch for ch in category.channels]
+        
+        def get_priority(ch):
+            # Tenta extrair do tópico: "Ticket #1 de user | assunto | priority:urgent"
+            if ch.topic and "priority:" in (ch.topic or ""):
+                for p in priority_order:
+                    if f"priority:{p}" in ch.topic:
+                        return p
+            return "medium"
+        
+        def sort_key(ch):
+            p = get_priority(ch)
+            return (priority_order.get(p, 2), ch.created_at.timestamp())
+        
+        sorted_channels = sorted(channels, key=sort_key)
+        
+        for i, ch in enumerate(sorted_channels):
+            try:
+                if ch.position != i:
+                    await ch.edit(position=i)
+            except:
+                pass
+        logger.info(f"📊 Categoria {category.name} reordenada ({len(channels)} canais)")
     
     # ═══════════════ REGISTRAR VIEWS NO STARTUP ═══════════════
     
