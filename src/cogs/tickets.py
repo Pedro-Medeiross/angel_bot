@@ -975,7 +975,7 @@ class Tickets(commands.Cog):
         logger.info(f"📊 Categoria {category.name} reordenada ({len(channels)} canais)")
         
         
-    @tasks.loop(minutes=1)
+    @tasks.loop(seconds=30)
     async def auto_close_inactive(self):
         print(f"⏰ AUTO-CLOSE RODANDO! {discord.utils.utcnow()}")
         """Fecha tickets inativos após auto_close_hours"""
@@ -1006,99 +1006,104 @@ class Tickets(commands.Cog):
             print(f"⏰ {len(all_tickets)} tickets abertos/claimados em {guild.name}")
 
             for ticket in all_tickets:
-                channel = guild.get_channel(int(ticket["channel_id"]))
-                if not channel:
-                    print(f"⏰ Canal não encontrado: {ticket['channel_id']}")
-                    continue
-                
-                last_msg = None
-                async for msg in channel.history(limit=1):
-                    last_msg = msg
-                    break
-                
-                if not last_msg:
-                    print(f"⏰ Sem mensagens no canal {channel.name}")
-                    continue
-                
-                hours_inactive = (now - last_msg.created_at).total_seconds() / 3600
-                print(f"⏰ Ticket {ticket['id']}: inactive={hours_inactive:.4f}h ({last_msg.created_at})")
-                
-                if hours_inactive < auto_close_hours:
-                    print(f"⏰ Não expirou ainda")
-                    continue
-                
-                print(f"⏰ FECHANDO! {ticket['id']}")
-                
-                # Gera transcript
-                messages_data = []
-                async for message in channel.history(oldest_first=True, limit=500):
-                    if message.author.bot and message.embeds:
-                        continue
-                    messages_data.append({
-                        "author_name": message.author.display_name,
-                        "author_username": message.author.name,
-                        "author_id": str(message.author.id),
-                        "author_avatar": str(message.author.display_avatar.url),
-                        "content": message.content,
-                        "attachments": [
-                            {"url": a.url, "filename": a.filename, "content_type": a.content_type, "size": a.size}
-                            for a in message.attachments
-                        ],
-                        "stickers": [{"name": s.name, "url": str(s.url)} for s in message.stickers],
-                        "embeds": [
-                            {"title": e.title, "description": e.description, "url": e.url}
-                            for e in message.embeds
-                        ],
-                        "timestamp": message.created_at.isoformat()
-                    })
-                
-                transcript_data = {
-                    "ticket_id": ticket["id"],
-                    "ticket_number": ticket.get("ticket_number", ""),
-                    "guild_id": str(guild.id),
-                    "guild_name": guild.name,
-                    "guild_icon": str(guild.icon.url) if guild.icon else None,
-                    "opened_by_name": ticket.get("user_name", "Desconhecido"),
-                    "opened_by_id": str(ticket.get("user_id", "")),
-                    "opened_at": ticket.get("created_at", ""),
-                    "closed_by_name": str(self.bot.user),
-                    "closed_by_id": str(self.bot.user.id),
-                    "close_reason": f"Fechado automaticamente por inatividade ({auto_close_hours}h)",
-                    "closed_at": discord.utils.utcnow().isoformat(),
-                    "messages": messages_data
-                }
-                
-                async with aiohttp.ClientSession(auth=self.auth) as session:
-                    await session.post(
-                        f"{self.api_url}/guilds/{guild.id}/tickets/{ticket['id']}/transcript",
-                        json=transcript_data
-                    )
-                
-                await self._api_post(
-                    f"/guilds/{guild.id}/tickets/{ticket['id']}/bot/close",
-                    {
-                        "closed_by": str(self.bot.user.id),
-                        "reason": f"Fechado automaticamente por inatividade ({auto_close_hours}h)"
-                    }
-                )
-                
-                # Bloqueia e envia mensagem
-                await channel.set_permissions(guild.default_role, send_messages=False)
-                await channel.set_permissions(guild.me, send_messages=True)
-                
-                embed = discord.Embed(
-                    title="⏰ Ticket Fechado por Inatividade",
-                    description=f"Ticket fechado automaticamente após {auto_close_hours}h sem mensagens.",
-                    color=discord.Color.orange()
-                )
-                await channel.send(embed=embed)
-                
-                await asyncio.sleep(5)
                 try:
-                    await channel.delete()
-                except:
-                    pass
-                logger.info(f"⏰ Ticket {ticket['id']} fechado por inatividade em {guild.name}")
+                    channel = guild.get_channel(int(ticket["channel_id"]))
+                    if not channel:
+                        print(f"⏰ Canal não encontrado: {ticket['channel_id']}")
+                        continue
+                
+                    last_msg = None
+                    async for msg in channel.history(limit=1):
+                        last_msg = msg
+                        break
+                    
+                    if not last_msg:
+                        print(f"⏰ Sem mensagens no canal {channel.name}")
+                        continue
+                    
+                    now = datetime.now(timezone.utc)
+                    hours_inactive = (now - last_msg.created_at).total_seconds() / 3600
+                    print(f"⏰ Ticket {ticket['id']}: inactive={hours_inactive:.4f}h ({last_msg.created_at})")
+                    
+                    if hours_inactive < auto_close_hours:
+                        print(f"⏰ Não expirou ainda")
+                        continue
+                    
+                    print(f"⏰ FECHANDO! {ticket['id']}")
+                    
+                    # Gera transcript
+                    messages_data = []
+                    async for message in channel.history(oldest_first=True, limit=500):
+                        if message.author.bot and message.embeds:
+                            continue
+                        messages_data.append({
+                            "author_name": message.author.display_name,
+                            "author_username": message.author.name,
+                            "author_id": str(message.author.id),
+                            "author_avatar": str(message.author.display_avatar.url),
+                            "content": message.content,
+                            "attachments": [
+                                {"url": a.url, "filename": a.filename, "content_type": a.content_type, "size": a.size}
+                                for a in message.attachments
+                            ],
+                            "stickers": [{"name": s.name, "url": str(s.url)} for s in message.stickers],
+                            "embeds": [
+                                {"title": e.title, "description": e.description, "url": e.url}
+                                for e in message.embeds
+                            ],
+                            "timestamp": message.created_at.isoformat()
+                        })
+                    
+                    transcript_data = {
+                        "ticket_id": ticket["id"],
+                        "ticket_number": ticket.get("ticket_number", ""),
+                        "guild_id": str(guild.id),
+                        "guild_name": guild.name,
+                        "guild_icon": str(guild.icon.url) if guild.icon else None,
+                        "opened_by_name": ticket.get("user_name", "Desconhecido"),
+                        "opened_by_id": str(ticket.get("user_id", "")),
+                        "opened_at": ticket.get("created_at", ""),
+                        "closed_by_name": str(self.bot.user),
+                        "closed_by_id": str(self.bot.user.id),
+                        "close_reason": f"Fechado automaticamente por inatividade ({auto_close_hours}h)",
+                        "closed_at": discord.utils.utcnow().isoformat(),
+                        "messages": messages_data
+                    }
+                    
+                    async with aiohttp.ClientSession(auth=self.auth) as session:
+                        await session.post(
+                            f"{self.api_url}/guilds/{guild.id}/tickets/{ticket['id']}/transcript",
+                            json=transcript_data
+                        )
+                    
+                    await self._api_post(
+                        f"/guilds/{guild.id}/tickets/{ticket['id']}/bot/close",
+                        {
+                            "closed_by": str(self.bot.user.id),
+                            "reason": f"Fechado automaticamente por inatividade ({auto_close_hours}h)"
+                        }
+                    )
+                    
+                    # Bloqueia e envia mensagem
+                    await channel.set_permissions(guild.default_role, send_messages=False)
+                    await channel.set_permissions(guild.me, send_messages=True)
+                    
+                    embed = discord.Embed(
+                        title="⏰ Ticket Fechado por Inatividade",
+                        description=f"Ticket fechado automaticamente após {auto_close_hours}h sem mensagens.",
+                        color=discord.Color.orange()
+                    )
+                    await channel.send(embed=embed)
+                    
+                    await asyncio.sleep(5)
+                    try:
+                        await channel.delete()
+                    except:
+                        pass
+                    logger.info(f"⏰ Ticket {ticket['id']} fechado por inatividade em {guild.name}")
+                except Exception as e:
+                    print(f"⏰ ERRO no ticket {ticket.get('id', '?')}: {e}")
+                    continue
 
     @auto_close_inactive.before_loop
     async def before_auto_close(self):
