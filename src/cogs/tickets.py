@@ -977,19 +977,15 @@ class Tickets(commands.Cog):
         
     @tasks.loop(seconds=30)
     async def auto_close_inactive(self):
-        print(f"⏰ AUTO-CLOSE RODANDO! {discord.utils.utcnow()}")
         """Fecha tickets inativos após auto_close_hours"""
         from datetime import datetime, timezone
         
         for guild in self.bot.guilds:
-            print(f"⏰ Verificando guild: {guild.name}")
             config = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
             if not config:
-                print(f"⏰ Sem config para {guild.name}")
                 continue
             
-            auto_close_hours = 0.016
-            print(f"⏰ auto_close_hours={auto_close_hours}")
+            auto_close_hours = config.get("auto_close_hours", 0)
             
             if auto_close_hours <= 0:
                 continue
@@ -1003,13 +999,10 @@ class Tickets(commands.Cog):
             if claimed_tickets:
                 all_tickets.extend(claimed_tickets.get("tickets", []))
 
-            print(f"⏰ {len(all_tickets)} tickets abertos/claimados em {guild.name}")
-
             for ticket in all_tickets:
                 try:
                     channel = guild.get_channel(int(ticket["channel_id"]))
                     if not channel:
-                        print(f"⏰ Canal não encontrado: {ticket['channel_id']}")
                         continue
                 
                     last_msg = None
@@ -1018,18 +1011,14 @@ class Tickets(commands.Cog):
                         break
                     
                     if not last_msg:
-                        print(f"⏰ Sem mensagens no canal {channel.name}")
                         continue
                     
                     now = datetime.now(timezone.utc)
                     hours_inactive = (now - last_msg.created_at).total_seconds() / 3600
-                    print(f"⏰ Ticket {ticket['id']}: inactive={hours_inactive:.4f}h ({last_msg.created_at})")
                     
                     if hours_inactive < auto_close_hours:
-                        print(f"⏰ Não expirou ainda")
                         continue
                     
-                    print(f"⏰ FECHANDO! {ticket['id']}")
                     
                     # Gera transcript
                     messages_data = []
@@ -1102,7 +1091,6 @@ class Tickets(commands.Cog):
                         pass
                     logger.info(f"⏰ Ticket {ticket['id']} fechado por inatividade em {guild.name}")
                 except Exception as e:
-                    print(f"⏰ ERRO no ticket {ticket.get('id', '?')}: {e}")
                     continue
 
     @auto_close_inactive.before_loop
