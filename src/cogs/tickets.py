@@ -325,43 +325,41 @@ class ConfirmCloseView(View):
 # ═══════════════ CATEGORIA ═══════════════
 
 class CategorySelect(discord.ui.Select):
-    """Dropdown para escolher categoria"""
-    
-    def __init__(self, panel_id: str, cog):
+    def __init__(self, panel_id: str, cog, categories: list):
         self.panel_id = panel_id
         self.cog = cog
+        self.categories = categories  # 👈 Salva como atributo
         
         options = [
-            discord.SelectOption(label="🐛 Bug/Erro", value="bug", emoji="🐛"),
-            discord.SelectOption(label="🚨 Denúncia", value="denuncia", emoji="🚨"),
-            discord.SelectOption(label="💎 Contribuidor", value="contribuidor", emoji="💎"),
-            discord.SelectOption(label="💰 Financeiro", value="financeiro", emoji="💰"),
-            discord.SelectOption(label="🌟 Influencer/Parceria", value="influencer", emoji="🌟"),
-            discord.SelectOption(label="❓ Dúvida", value="duvida", emoji="❓"),
-            discord.SelectOption(label="🔧 Suporte Técnico", value="suporte", emoji="🔧"),
-            discord.SelectOption(label="📌 Outro", value="outro", emoji="📌"),
+            discord.SelectOption(label=c["label"], value=c["name"], emoji=c.get("emoji", ""))
+            for c in categories
         ]
         super().__init__(placeholder="Selecione a categoria...", options=options)
     
     async def callback(self, interaction: discord.Interaction):
         category_key = self.values[0]
-        modal = OpenTicketModal(self.panel_id, category_key, self.cog)
+        # Acha a prioridade
+        priority = "medium"
+        for c in self.categories:  # 👈 Usa self.categories
+            if c["name"] == category_key:
+                priority = c.get("priority", "medium")
+                break
+        modal = OpenTicketModal(self.panel_id, category_key, priority, self.cog)
         await interaction.response.send_modal(modal)
 
 class CategoryView(View):
-    """View com dropdown de categoria"""
-    
-    def __init__(self, panel_id: str, cog):
+    def __init__(self, panel_id: str, cog, categories: list):
         super().__init__(timeout=300)
-        self.add_item(CategorySelect(panel_id, cog))
+        self.add_item(CategorySelect(panel_id, cog, categories))
 
 class OpenTicketModal(Modal):
     """Modal para o usuário preencher ao abrir o ticket"""
     
-    def __init__(self, panel_id: str, category_key: str, cog):
+    def __init__(self, panel_id: str, category_key: str, priority: str, cog):
         super().__init__(title="Abrir Ticket")
         self.panel_id = panel_id
         self.category_key = category_key
+        self.priority = priority
         self.cog = cog
         
         self.subject = TextInput(
@@ -387,6 +385,7 @@ class OpenTicketModal(Modal):
             interaction,
             self.panel_id,
             self.category_key,
+            self.priority,
             self.subject.value,
             self.description.value
         )
@@ -551,7 +550,7 @@ class Tickets(commands.Cog):
         
         await channel.edit(overwrites=overwrites)
         
-    async def _create_ticket(self, interaction, panel_id, category_key, subject, description):
+    async def _create_ticket(self, interaction, panel_id, category_key, priority, subject, description):
         """Cria o ticket após preenchimento do modal"""
         
         await interaction.response.defer(ephemeral=True)
@@ -585,19 +584,6 @@ class Tickets(commands.Cog):
         category = guild.get_channel(int(category_id)) if category_id else None
         
         channel_name = f"ticket-{ticket_count:04d}-{user.name}"
-        
-        category_priority = {
-            "bug": "urgent",
-            "denuncia": "urgent",
-            "contribuidor": "high",
-            "financeiro": "high",
-            "influencer": "medium",
-            "duvida": "medium",
-            "suporte": "medium",
-            "outro": "low",
-        }
-
-        priority = category_priority.get(category_key, "medium")
         
         topic = f"Ticket #{ticket_count} de {user.name} | {subject} | priority:{priority}"
         try:
@@ -974,8 +960,14 @@ class Tickets(commands.Cog):
                 pass
         logger.info(f"📊 Categoria {category.name} reordenada ({len(channels)} canais)")
         
+    async def _get_categories(self, guild_id: int) -> list:
+        data = await self._api_get(f"/guilds/{guild_id}/tickets/bot/categories")
+        if isinstance(data, list):
+            return [c for c in data if c.get("is_active", True)]
+        return []
         
-    @tasks.loop(seconds=30)
+        
+    @tasks.loop(minutes=10)
     async def auto_close_inactive(self):
         """Fecha tickets inativos após auto_close_hours"""
         from datetime import datetime, timezone
@@ -1256,7 +1248,13 @@ class Tickets(commands.Cog):
         if custom_id.startswith("ticket_open_"):
             panel_id = custom_id.replace("ticket_open_", "")
             
-            view = CategoryView(panel_id, self)
+            categories = await self._get_categories(interaction.guild.id)
+            if not categories:
+                await interaction.response.send_message("❌ Nenhuma categoria disponível.", ephemeral=True)
+                return
+
+            
+            view = CategoryView(panel_id, self, categories)
             await interaction.response.send_message(
                 "📂 **Selecione a categoria do seu ticket:**",
                 view=view,
