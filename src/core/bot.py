@@ -21,6 +21,7 @@ class MyBot(commands.Bot):
         'cogs.role_logs',
         'cogs.member_events',
         'cogs.tickets',
+        'cogs.ticket_notifications',
     ]
     
     def __init__(self):
