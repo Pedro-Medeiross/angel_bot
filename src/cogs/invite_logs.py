@@ -10,23 +10,53 @@ class InviteLogs(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.api_url = config.API_URL
-        self.api_user = config.API_USER
-        self.api_pass = config.API_PASS
-        self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
+        self.auth = aiohttp.BasicAuth(config.API_USER, config.API_PASS)
         self.log_api = log_api
-        self._invite_cache = {}  # guild_id: {invite_code: invite_object}
+        self._invite_cache: dict[int, dict[str, discord.Invite]] = {}
     
-    async def get_log_channel(self, guild_id: int, log_type: str) -> int | None:
+    async def _get_log_channel(self, guild_id: int, log_type: str) -> int | None:
         try:
             async with aiohttp.ClientSession(auth=self.auth) as session:
                 url = f"{self.api_url}/guilds/{guild_id}/log-channel/{log_type}"
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
                         return data.get("channel_id")
         except aiohttp.ClientError as e:
             print(f"❌ Erro ao consultar API: {e}")
         return None
+    
+    def _build_invite_embed(self, invite: discord.Invite, title: str, color: discord.Color,
+                            extra_fields: dict = None) -> discord.Embed:
+        """Cria embed base para logs de invite"""
+        description = f"Novo convite criado por {invite.inviter.mention}" if invite.inviter else f"Convite `{invite.code}` foi removido"
+        
+        embed = discord.Embed(title=title, description=description, color=color, timestamp=discord.utils.utcnow())
+        
+        if invite.inviter:
+            embed.set_author(name=invite.inviter.display_name, icon_url=invite.inviter.display_avatar.url)
+        
+        embed.add_field(name="📝 Código", value=invite.code, inline=True)
+        embed.add_field(name="📢 Canal", value=invite.channel.mention if invite.channel else "Desconhecido", inline=True)
+        
+        if extra_fields:
+            for name, value in extra_fields.items():
+                embed.add_field(name=name, value=value, inline=True)
+        
+        return embed
+    
+    def _build_invite_data(self, invite: discord.Invite, action: str) -> dict:
+        """Cria dados base para envio à API"""
+        return {
+            "action": action,
+            "invite_code": invite.code,
+            "inviter_name": invite.inviter.name if invite.inviter else None,
+            "inviter_display_name": invite.inviter.display_name if invite.inviter else None,
+            "channel_name": invite.channel.name if invite.channel else None,
+            "channel_id": str(invite.channel.id) if invite.channel else None,
+        }
+    
+    # ═══════════════ CACHE ═══════════════
     
     @commands.Cog.listener()
     async def on_ready(self):
@@ -35,116 +65,64 @@ class InviteLogs(commands.Cog):
             if guild.me.guild_permissions.manage_guild:
                 try:
                     invites = await guild.invites()
-                    self._invite_cache[guild.id] = {
-                        invite.code: invite for invite in invites
-                    }
+                    self._invite_cache[guild.id] = {inv.code: inv for inv in invites}
                 except discord.Forbidden:
                     self._invite_cache[guild.id] = {}
     
+    # ═══════════════ INVITE CREATE ═══════════════
+    
     @commands.Cog.listener()
     async def on_invite_create(self, invite: discord.Invite):
-        """Log de invite criado"""
+        self._invite_cache.setdefault(invite.guild.id, {})[invite.code] = invite
         
-        # Atualiza cache
-        if invite.guild.id not in self._invite_cache:
-            self._invite_cache[invite.guild.id] = {}
-        self._invite_cache[invite.guild.id][invite.code] = invite
-        
-        log_channel_id = await self.get_log_channel(invite.guild.id, "log_invites")
+        log_channel_id = await self._get_log_channel(invite.guild.id, "log_invites")
         
         if log_channel_id:
             log_channel = invite.guild.get_channel(log_channel_id)
             if log_channel:
-                embed = discord.Embed(
-                    title="🔗 Convite criado",
-                    description=f"Novo convite criado por {invite.inviter.mention}",
-                    color=discord.Color.green(),
-                    timestamp=discord.utils.utcnow()
-                )
-                embed.set_author(name=invite.inviter.display_name, icon_url=invite.inviter.display_avatar.url)
-                embed.set_footer(text=f"ID: {invite.inviter.id} | @{invite.inviter.name}")
-                
-                embed.add_field(name="📝 Código", value=invite.code, inline=True)
-                embed.add_field(name="📢 Canal", value=invite.channel.mention, inline=True)
-                
-                if invite.max_uses:
-                    embed.add_field(name="🔢 Máximo de usos", value=str(invite.max_uses), inline=True)
-                else:
-                    embed.add_field(name="🔢 Máximo de usos", value="Ilimitado", inline=True)
+                extra = {}
+                extra["🔢 Máximo de usos"] = str(invite.max_uses) if invite.max_uses else "Ilimitado"
                 
                 if invite.max_age:
-                    if invite.max_age == 0:
-                        embed.add_field(name="⏰ Expira em", value="Nunca", inline=True)
-                    else:
-                        hours = invite.max_age // 3600
-                        embed.add_field(name="⏰ Expira em", value=f"{hours}h", inline=True)
+                    extra["⏰ Expira em"] = "Nunca" if invite.max_age == 0 else f"{invite.max_age // 3600}h"
                 else:
-                    embed.add_field(name="⏰ Expira em", value="Nunca", inline=True)
+                    extra["⏰ Expira em"] = "Nunca"
                 
                 if invite.temporary:
-                    embed.add_field(name="🔄 Temporário", value="Sim (membro sai ao perder acesso)", inline=False)
+                    extra["🔄 Temporário"] = "Sim (membro sai ao perder acesso)"
                 
+                embed = self._build_invite_embed(invite, "🔗 Convite criado", discord.Color.green(), extra)
                 await log_channel.send(embed=embed)
         
         await self.log_api.send_log(
-            guild_id=invite.guild.id,
-            log_type="log_invites",
-            user_id=invite.inviter.id,
-            channel_id=invite.channel.id,
+            guild_id=invite.guild.id, log_type="log_invites",
+            user_id=invite.inviter.id, channel_id=invite.channel.id,
             data={
-                "action": "create",
-                "invite_code": invite.code,
-                "inviter_name": invite.inviter.name,
-                "inviter_display_name": invite.inviter.display_name,
-                "channel_name": invite.channel.name,
-                "channel_id": str(invite.channel.id),
-                "max_uses": invite.max_uses,
-                "max_age_seconds": invite.max_age,
-                "temporary": invite.temporary
+                **self._build_invite_data(invite, "create"),
+                "max_uses": invite.max_uses, "max_age_seconds": invite.max_age, "temporary": invite.temporary
             }
         )
     
+    # ═══════════════ INVITE DELETE ═══════════════
+    
     @commands.Cog.listener()
     async def on_invite_delete(self, invite: discord.Invite):
-        """Log de invite deletado"""
-        
-        # Remove do cache
         if invite.guild.id in self._invite_cache:
             self._invite_cache[invite.guild.id].pop(invite.code, None)
         
-        log_channel_id = await self.get_log_channel(invite.guild.id, "log_invites")
+        log_channel_id = await self._get_log_channel(invite.guild.id, "log_invites")
         
         if log_channel_id:
             log_channel = invite.guild.get_channel(log_channel_id)
             if log_channel:
-                embed = discord.Embed(
-                    title="🗑️ Convite deletado",
-                    description=f"Convite `{invite.code}` foi removido",
-                    color=discord.Color.red(),
-                    timestamp=discord.utils.utcnow()
-                )
-                
-                if invite.inviter:
-                    embed.set_author(name=invite.inviter.display_name, icon_url=invite.inviter.display_avatar.url)
-                
-                embed.add_field(name="📝 Código", value=invite.code, inline=True)
-                embed.add_field(name="📢 Canal", value=invite.channel.mention if invite.channel else "Desconhecido", inline=True)
-                
+                embed = self._build_invite_embed(invite, "🗑️ Convite deletado", discord.Color.red())
                 await log_channel.send(embed=embed)
         
         await self.log_api.send_log(
-            guild_id=invite.guild.id,
-            log_type="log_invites",
+            guild_id=invite.guild.id, log_type="log_invites",
             user_id=invite.inviter.id if invite.inviter else None,
             channel_id=invite.channel.id if invite.channel else None,
-            data={
-                "action": "delete",
-                "invite_code": invite.code,
-                "inviter_name": invite.inviter.name if invite.inviter else None,
-                "inviter_display_name": invite.inviter.display_name if invite.inviter else None,
-                "channel_name": invite.channel.name if invite.channel else None,
-                "channel_id": str(invite.channel.id) if invite.channel else None
-            }
+            data=self._build_invite_data(invite, "delete")
         )
 
 async def setup(bot: commands.Bot):

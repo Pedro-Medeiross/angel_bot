@@ -1,9 +1,9 @@
 import asyncio
 import sys
-import os
+from pathlib import Path
 
-# Adiciona o diretório pai ao path do Python
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Adiciona raiz do projeto ao path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.bot import MyBot
 from src.core.config import config

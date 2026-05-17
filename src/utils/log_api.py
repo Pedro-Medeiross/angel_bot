@@ -1,4 +1,5 @@
 import aiohttp
+from typing import Optional
 from src.core.config import config
 
 class LogAPI:
@@ -12,41 +13,40 @@ class LogAPI:
         self,
         guild_id: int,
         log_type: str,
-        user_id: int = None,
-        target_id: int = None,
-        channel_id: int = None,
-        data: dict = None
-    ) -> dict | None:
+        user_id: Optional[int] = None,
+        target_id: Optional[int] = None,
+        channel_id: Optional[int] = None,
+        data: Optional[dict] = None
+    ) -> Optional[dict]:
         """Envia um log para a API"""
+        payload = {
+            "log_type": log_type,
+            "user_id": user_id,
+            "target_id": target_id,
+            "channel_id": channel_id,
+            "data": data or {}
+        }
+        
         try:
             async with aiohttp.ClientSession(auth=self.auth) as session:
-                url = f"{self.base_url}/guilds/{guild_id}/logs"
-                async with session.post(url, json={
-                    "log_type": log_type,
-                    "user_id": user_id,
-                    "target_id": target_id,
-                    "channel_id": channel_id,
-                    "data": data or {}
-                }) as resp:
+                async with session.post(f"{self.base_url}/guilds/{guild_id}/logs", json=payload) as resp:
                     if resp.status == 200:
                         return await resp.json()
-                    else:
-                        print(f"❌ Erro ao enviar log: {resp.status}")
-                        return None
+                    print(f"❌ Erro ao enviar log: {resp.status}")
         except aiohttp.ClientError as e:
             print(f"❌ Erro API log {log_type}: {e}")
-            return None
+        return None
     
     async def send_mod_log(
         self,
         guild_id: int,
         log_type: str,
-        moderator: discord.Member,
-        target: discord.Member | discord.User,
-        reason: str = None,
-        duration: str = None,
+        moderator,
+        target,
+        reason: Optional[str] = None,
+        duration: Optional[str] = None,
         **kwargs
-    ) -> dict | None:
+    ) -> Optional[dict]:
         """Envia log de comando moderativo"""
         return await self.send_log(
             guild_id=guild_id,

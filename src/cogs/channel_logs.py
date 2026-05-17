@@ -11,26 +11,24 @@ class ChannelLogs(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.api_url = config.API_URL
-        self.api_user = config.API_USER
-        self.api_pass = config.API_PASS
-        self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
+        self.auth = aiohttp.BasicAuth(config.API_USER, config.API_PASS)
         self.log_api = log_api
-        self._position_queue = {}
-        self._position_task = {}
-        self._ignored_categories = {}  # guild_id: set[category_id]
-        self._tickets_cog = None  # Referência à cog de tickets
+        self._position_queue: dict = {}
+        self._position_task: dict = {}
+        self._ignored_categories: dict[int, set] = {}
     
-    async def _get_ignored_categories(self, guild_id: int) -> set:
+    # ═══════════════ HELPERS ═══════════════
+    
+    async def _get_ignored_categories(self, guild_id: int) -> set[int]:
         """Busca categorias de ticket para ignorar nos logs"""
         if guild_id in self._ignored_categories:
             return self._ignored_categories[guild_id]
         
         ignored = set()
         
-        # Busca painéis de ticket ativos
         try:
             async with aiohttp.ClientSession(auth=self.auth) as session:
-                url = f"{self.api_url}/guilds/{guild_id}/tickets/panels"
+                url = f"{self.api_url}/guilds/{guild_id}/tickets/bot/panels"
                 async with session.get(url) as resp:
                     if resp.status == 200:
                         panels = await resp.json()
@@ -48,23 +46,23 @@ class ChannelLogs(commands.Cog):
         """Verifica se o canal está numa categoria de ticket"""
         if not hasattr(channel, 'category_id') or not channel.category_id:
             return False
-        
-        ignored = self._ignored_categories.get(channel.guild.id, set())
-        return channel.category_id in ignored
+        return channel.category_id in self._ignored_categories.get(channel.guild.id, set())
     
-    async def get_log_channel(self, guild_id: int, log_type: str) -> int | None:
+    async def _get_log_channel(self, guild_id: int, log_type: str) -> int | None:
+        """Busca canal de log configurado na API"""
         try:
             async with aiohttp.ClientSession(auth=self.auth) as session:
                 url = f"{self.api_url}/guilds/{guild_id}/log-channel/{log_type}"
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
                         return data.get("channel_id")
         except aiohttp.ClientError as e:
             print(f"❌ Erro ao consultar API: {e}")
         return None
     
-    def _channel_type_name(self, channel: discord.abc.GuildChannel) -> str:
+    @staticmethod
+    def _channel_type_name(channel: discord.abc.GuildChannel) -> str:
         type_map = {
             discord.ChannelType.text: "Texto",
             discord.ChannelType.voice: "Voz",
@@ -74,6 +72,32 @@ class ChannelLogs(commands.Cog):
             discord.ChannelType.news: "Anúncios",
         }
         return type_map.get(channel.type, str(channel.type))
+    
+    def _build_base_embed(self, title: str, color: discord.Color, channel: discord.abc.GuildChannel) -> discord.Embed:
+        """Cria embed base para logs de canal"""
+        embed = discord.Embed(title=title, color=color, timestamp=discord.utils.utcnow())
+        embed.add_field(name="📛 Nome", value=channel.name, inline=True)
+        embed.add_field(name="🆔 ID", value=channel.id, inline=True)
+        embed.add_field(name="📋 Tipo", value=self._channel_type_name(channel), inline=True)
+        
+        if hasattr(channel, 'category') and channel.category:
+            embed.add_field(name="📁 Categoria", value=channel.category.name, inline=True)
+        
+        return embed
+    
+    def _build_log_data(self, channel: discord.abc.GuildChannel) -> dict:
+        """Cria dados base para envio à API"""
+        return {
+            "channel_name": channel.name,
+            "channel_id": str(channel.id),
+            "channel_type": str(channel.type),
+            "channel_type_name": self._channel_type_name(channel),
+            "category_name": channel.category.name if hasattr(channel, 'category') and channel.category else None,
+            "category_id": str(channel.category.id) if hasattr(channel, 'category') and channel.category else None,
+            "position": channel.position
+        }
+    
+    # ═══════════════ CACHE ═══════════════
     
     @commands.Cog.listener()
     async def on_ready(self):
@@ -87,127 +111,75 @@ class ChannelLogs(commands.Cog):
     
     @commands.Cog.listener()
     async def on_guild_channel_create(self, channel: discord.abc.GuildChannel):
-        """Log de canal criado"""
-        
         if self._is_ignored(channel):
             return
         
-        log_channel_id = await self.get_log_channel(channel.guild.id, "channel_create")
+        log_channel_id = await self._get_log_channel(channel.guild.id, "channel_create")
         
         if log_channel_id:
             log_channel = channel.guild.get_channel(log_channel_id)
             if log_channel:
-                embed = discord.Embed(
-                    title="📢 Canal criado",
-                    color=discord.Color.green()
-                )
-                embed.add_field(name="📛 Nome", value=channel.name, inline=True)
-                embed.add_field(name="🆔 ID", value=channel.id, inline=True)
-                embed.add_field(name="📋 Tipo", value=self._channel_type_name(channel), inline=True)
-                
-                if hasattr(channel, 'category') and channel.category:
-                    embed.add_field(name="📁 Categoria", value=channel.category.name, inline=True)
-                
+                embed = self._build_base_embed("📢 Canal criado", discord.Color.green(), channel)
                 if isinstance(channel, discord.TextChannel) and channel.topic:
                     embed.add_field(name="📝 Tópico", value=channel.topic[:1024], inline=False)
-                
                 await log_channel.send(embed=embed)
         
         await self.log_api.send_log(
             guild_id=channel.guild.id,
             log_type="channel_create",
             channel_id=channel.id,
-            data={
-                "channel_name": channel.name,
-                "channel_id": str(channel.id),
-                "channel_type": str(channel.type),
-                "channel_type_name": self._channel_type_name(channel),
-                "category_name": channel.category.name if hasattr(channel, 'category') and channel.category else None,
-                "category_id": str(channel.category.id) if hasattr(channel, 'category') and channel.category else None,
-                "topic": channel.topic if isinstance(channel, discord.TextChannel) else None,
-                "position": channel.position
-            }
+            data={**self._build_log_data(channel), "topic": channel.topic if isinstance(channel, discord.TextChannel) else None}
         )
     
     # ═══════════════ CHANNEL DELETE ═══════════════
     
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel):
-        """Log de canal deletado"""
-        
         if self._is_ignored(channel):
             return
         
-        log_channel_id = await self.get_log_channel(channel.guild.id, "channel_delete")
+        log_channel_id = await self._get_log_channel(channel.guild.id, "channel_delete")
         
         if log_channel_id:
             log_channel = channel.guild.get_channel(log_channel_id)
             if log_channel:
-                embed = discord.Embed(
-                    title="🗑️ Canal deletado",
-                    color=discord.Color.red()
-                )
-                embed.add_field(name="📛 Nome", value=channel.name, inline=True)
-                embed.add_field(name="🆔 ID", value=channel.id, inline=True)
-                embed.add_field(name="📋 Tipo", value=self._channel_type_name(channel), inline=True)
-                
-                if hasattr(channel, 'category') and channel.category:
-                    embed.add_field(name="📁 Categoria", value=channel.category.name, inline=True)
-                
+                embed = self._build_base_embed("🗑️ Canal deletado", discord.Color.red(), channel)
                 await log_channel.send(embed=embed)
         
         await self.log_api.send_log(
             guild_id=channel.guild.id,
             log_type="channel_delete",
             channel_id=channel.id,
-            data={
-                "channel_name": channel.name,
-                "channel_id": str(channel.id),
-                "channel_type": str(channel.type),
-                "channel_type_name": self._channel_type_name(channel),
-                "category_name": channel.category.name if hasattr(channel, 'category') and channel.category else None,
-                "category_id": str(channel.category.id) if hasattr(channel, 'category') and channel.category else None,
-                "position": channel.position
-            }
+            data=self._build_log_data(channel)
         )
     
     # ═══════════════ CHANNEL UPDATE ═══════════════
     
     @commands.Cog.listener()
     async def on_guild_channel_update(self, before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
-        """Log de canal editado"""
-        
         if self._is_ignored(after):
             return
         
-        # Se mudou só a posição, agrupa
+        # Mudança só de posição → agrupa
         if before.position != after.position and before.name == after.name:
             guild_id = after.guild.id
-            
-            if guild_id not in self._position_queue:
-                self._position_queue[guild_id] = {}
-            
-            self._position_queue[guild_id][after.id] = (before.position, after.position, after.name)
+            self._position_queue.setdefault(guild_id, {})[after.id] = (before.position, after.position, after.name)
             
             if guild_id in self._position_task:
                 self._position_task[guild_id].cancel()
-            
-            self._position_task[guild_id] = asyncio.create_task(
-                self._flush_position_changes(after.guild)
-            )
+            self._position_task[guild_id] = asyncio.create_task(self._flush_position_changes(after.guild))
             return
         
         await self._log_single_channel_update(before, after)
     
     async def _flush_position_changes(self, guild: discord.Guild):
-        """Envia mudanças de posição agrupadas após 1 segundo"""
         await asyncio.sleep(1)
         
         queue = self._position_queue.pop(guild.id, {})
         if not queue:
             return
         
-        log_channel_id = await self.get_log_channel(guild.id, "channel_update")
+        log_channel_id = await self._get_log_channel(guild.id, "channel_update")
         if not log_channel_id:
             return
         
@@ -215,9 +187,7 @@ class ChannelLogs(commands.Cog):
         if not log_channel:
             return
         
-        changes_list = []
-        for channel_id, (old_pos, new_pos, channel_name) in queue.items():
-            changes_list.append(f"**{channel_name}**: {old_pos} → {new_pos}")
+        changes_list = [f"**{name}**: {old} → {new}" for _, (old, new, name) in queue.items()]
         
         embed = discord.Embed(
             title="🔢 Posições de canais atualizadas",
@@ -244,22 +214,14 @@ class ChannelLogs(commands.Cog):
             data={
                 "type": "position_bulk",
                 "changes": [
-                    {
-                        "channel_id": str(channel_id),
-                        "channel_name": channel_name,
-                        "old_position": old_pos,
-                        "new_position": new_pos
-                    }
-                    for channel_id, (old_pos, new_pos, channel_name) in queue.items()
+                    {"channel_id": str(cid), "channel_name": name, "old_position": old, "new_position": new}
+                    for cid, (old, new, name) in queue.items()
                 ]
             }
         )
     
     async def _log_single_channel_update(self, before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
-        """Log de canal editado (mudanças não-posição)"""
-        
-        log_channel_id = await self.get_log_channel(after.guild.id, "channel_update")
-        
+        log_channel_id = await self._get_log_channel(after.guild.id, "channel_update")
         if not log_channel_id:
             return
         
@@ -291,10 +253,8 @@ class ChannelLogs(commands.Cog):
         if old_cat != new_cat:
             changes["category"] = {"old": old_cat, "new": new_cat}
         
-        before_overwrites = {str(target.id): overwrite for target, overwrite in before.overwrites.items()}
-        after_overwrites = {str(target.id): overwrite for target, overwrite in after.overwrites.items()}
-        if before_overwrites != after_overwrites:
-            changes["permissions"] = {"old": len(before_overwrites), "new": len(after_overwrites)}
+        if {str(t.id): o for t, o in before.overwrites.items()} != {str(t.id): o for t, o in after.overwrites.items()}:
+            changes["permissions"] = {"old": len(before.overwrites), "new": len(after.overwrites)}
         
         if not changes:
             return
@@ -306,22 +266,14 @@ class ChannelLogs(commands.Cog):
             timestamp=discord.utils.utcnow()
         )
         
+        name_map = {
+            "name": "📛 Nome", "topic": "📝 Tópico", "slowmode": "⏱️ Slowmode",
+            "nsfw": "🔞 NSFW", "bitrate": "🎵 Bitrate", "user_limit": "👥 Limite de usuários",
+            "category": "📁 Categoria", "permissions": "🔒 Permissões"
+        }
+        
         for key, value in changes.items():
-            name_map = {
-                "name": "📛 Nome",
-                "topic": "📝 Tópico",
-                "slowmode": "⏱️ Slowmode",
-                "nsfw": "🔞 NSFW",
-                "bitrate": "🎵 Bitrate",
-                "user_limit": "👥 Limite de usuários",
-                "category": "📁 Categoria",
-                "permissions": "🔒 Permissões"
-            }
-            embed.add_field(
-                name=name_map.get(key, key),
-                value=f"❌ {value['old']}\n✅ {value['new']}",
-                inline=True
-            )
+            embed.add_field(name=name_map.get(key, key), value=f"❌ {value['old']}\n✅ {value['new']}", inline=True)
         
         await log_channel.send(embed=embed)
         
@@ -329,13 +281,7 @@ class ChannelLogs(commands.Cog):
             guild_id=after.guild.id,
             log_type="channel_update",
             channel_id=after.id,
-            data={
-                "channel_name": after.name,
-                "channel_id": str(after.id),
-                "channel_type": str(after.type),
-                "channel_type_name": self._channel_type_name(after),
-                "changes": changes
-            }
+            data={**self._build_log_data(after), "changes": changes}
         )
 
 async def setup(bot: commands.Bot):

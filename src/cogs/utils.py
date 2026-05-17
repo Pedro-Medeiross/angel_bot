@@ -8,28 +8,21 @@ class Utils(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
     
-    # Comando Slash (/)
+    def _build_ping_embed(self, latency_ms: int) -> discord.Embed:
+        return discord.Embed(
+            title="🏓 Pong!",
+            description=f"Latência: **{latency_ms}ms**",
+            color=discord.Color.green()
+        )
+    
     @app_commands.command(name="ping", description="Mostra a latência do bot")
     async def ping_slash(self, interaction: discord.Interaction):
-        latency = round(self.bot.latency * 1000)
-        
-        embed = discord.Embed(
-            title="🏓 Pong!",
-            description=f"Latência: **{latency}ms**",
-            color=discord.Color.green()
-        )
+        embed = self._build_ping_embed(round(self.bot.latency * 1000))
         await interaction.response.send_message(embed=embed)
     
-    # Comando Prefix (!)
     @commands.command(name="ping", description="Mostra a latência do bot")
     async def ping_prefix(self, ctx: commands.Context):
-        latency = round(self.bot.latency * 1000)
-        
-        embed = discord.Embed(
-            title="🏓 Pong!",
-            description=f"Latência: **{latency}ms**",
-            color=discord.Color.green()
-        )
+        embed = self._build_ping_embed(round(self.bot.latency * 1000))
         await ctx.send(embed=embed)
 
 async def setup(bot: commands.Bot):

@@ -11,134 +11,116 @@ class RoleLogs(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.api_url = config.API_URL
-        self.api_user = config.API_USER
-        self.api_pass = config.API_PASS
-        self.auth = aiohttp.BasicAuth(self.api_user, self.api_pass)
+        self.auth = aiohttp.BasicAuth(config.API_USER, config.API_PASS)
         self.log_api = log_api
-        self._position_queue = {}
-        self._position_task = {}
+        self._position_queue: dict = {}
+        self._position_task: dict = {}
     
-    async def get_log_channel(self, guild_id: int, log_type: str) -> int | None:
+    async def _get_log_channel(self, guild_id: int, log_type: str) -> int | None:
         try:
             async with aiohttp.ClientSession(auth=self.auth) as session:
                 url = f"{self.api_url}/guilds/{guild_id}/log-channel/{log_type}"
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
                         return data.get("channel_id")
         except aiohttp.ClientError as e:
             print(f"❌ Erro ao consultar API: {e}")
         return None
     
+    def _build_role_embed(self, title: str, description: str, color: discord.Color,
+                          role: discord.Role = None) -> discord.Embed:
+        """Cria embed base para logs de cargo"""
+        embed = discord.Embed(title=title, description=description, color=color, timestamp=discord.utils.utcnow())
+        if role:
+            embed.add_field(name="📛 Nome", value=role.name, inline=True)
+            embed.add_field(name="🆔 ID", value=role.id, inline=True)
+            embed.add_field(name="🎨 Cor", value=str(role.color), inline=True)
+        return embed
+    
+    def _build_role_data(self, role: discord.Role) -> dict:
+        """Dados base do cargo para API"""
+        return {
+            "role_name": role.name,
+            "role_id": str(role.id),
+            "role_color": str(role.color),
+            "position": role.position,
+        }
+    
+    def _build_member_role_embed(self, member: discord.Member, title: str, description: str,
+                                  color: discord.Color) -> discord.Embed:
+        """Cria embed para logs de cargo de membro"""
+        embed = discord.Embed(title=title, description=description, color=color, timestamp=discord.utils.utcnow())
+        embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
+        embed.set_footer(text=f"ID: {member.id} | @{member.name}")
+        embed.add_field(name="👤 Membro", value=member.mention, inline=True)
+        return embed
+    
+    def _build_member_data(self, member: discord.Member) -> dict:
+        """Dados base do membro para API"""
+        return {
+            "user_name": member.name,
+            "display_name": member.display_name,
+            "user_avatar": str(member.display_avatar.url),
+        }
+    
     # ═══════════════ ROLE CREATE ═══════════════
     
     @commands.Cog.listener()
     async def on_guild_role_create(self, role: discord.Role):
-        """Log de cargo criado"""
-        
-        log_channel_id = await self.get_log_channel(role.guild.id, "role_create")
+        log_channel_id = await self._get_log_channel(role.guild.id, "role_create")
         
         if log_channel_id:
             log_channel = role.guild.get_channel(log_channel_id)
             if log_channel:
-                embed = discord.Embed(
-                    title="👔 Cargo criado",
-                    description=f"Cargo **{role.name}** criado",
-                    color=discord.Color.green(),
-                    timestamp=discord.utils.utcnow()
-                )
-                embed.add_field(name="📛 Nome", value=role.name, inline=True)
-                embed.add_field(name="🆔 ID", value=role.id, inline=True)
-                embed.add_field(name="🎨 Cor", value=str(role.color), inline=True)
+                embed = self._build_role_embed("👔 Cargo criado", f"Cargo **{role.name}** criado", discord.Color.green(), role)
                 embed.add_field(name="🔢 Posição", value=role.position, inline=True)
                 embed.add_field(name="👁️ Mencionável", value="Sim" if role.mentionable else "Não", inline=True)
                 embed.add_field(name="📌 Exibir separado", value="Sim" if role.hoist else "Não", inline=True)
-                
                 await log_channel.send(embed=embed)
         
-        await self.log_api.send_log(
-            guild_id=role.guild.id,
-            log_type="role_create",
-            data={
-                "role_name": role.name,
-                "role_id": str(role.id),
-                "role_color": str(role.color),
-                "position": role.position,
-                "mentionable": role.mentionable,
-                "hoist": role.hoist,
-                "permissions": role.permissions.value
-            }
-        )
+        await self.log_api.send_log(guild_id=role.guild.id, log_type="role_create", data={
+            **self._build_role_data(role),
+            "mentionable": role.mentionable, "hoist": role.hoist, "permissions": role.permissions.value
+        })
     
     # ═══════════════ ROLE DELETE ═══════════════
     
     @commands.Cog.listener()
     async def on_guild_role_delete(self, role: discord.Role):
-        """Log de cargo deletado"""
-        
-        log_channel_id = await self.get_log_channel(role.guild.id, "role_delete")
+        log_channel_id = await self._get_log_channel(role.guild.id, "role_delete")
         
         if log_channel_id:
             log_channel = role.guild.get_channel(log_channel_id)
             if log_channel:
-                embed = discord.Embed(
-                    title="🗑️ Cargo deletado",
-                    description=f"Cargo **{role.name}** removido",
-                    color=discord.Color.red(),
-                    timestamp=discord.utils.utcnow()
-                )
-                embed.add_field(name="📛 Nome", value=role.name, inline=True)
-                embed.add_field(name="🆔 ID", value=role.id, inline=True)
-                embed.add_field(name="🎨 Cor", value=str(role.color), inline=True)
-                
+                embed = self._build_role_embed("🗑️ Cargo deletado", f"Cargo **{role.name}** removido", discord.Color.red(), role)
                 await log_channel.send(embed=embed)
         
-        await self.log_api.send_log(
-            guild_id=role.guild.id,
-            log_type="role_delete",
-            data={
-                "role_name": role.name,
-                "role_id": str(role.id),
-                "role_color": str(role.color),
-                "position": role.position
-            }
-        )
+        await self.log_api.send_log(guild_id=role.guild.id, log_type="role_delete", data=self._build_role_data(role))
     
     # ═══════════════ ROLE UPDATE ═══════════════
     
     @commands.Cog.listener()
     async def on_guild_role_update(self, before: discord.Role, after: discord.Role):
-        """Log de cargo editado"""
-        
-        # Se mudou só a posição, agrupa
         if before.position != after.position and before.name == after.name and before.color == after.color:
             guild_id = after.guild.id
-            
-            if guild_id not in self._position_queue:
-                self._position_queue[guild_id] = {}
-            
-            self._position_queue[guild_id][after.id] = (before.position, after.position, after.name)
+            self._position_queue.setdefault(guild_id, {})[after.id] = (before.position, after.position, after.name)
             
             if guild_id in self._position_task:
                 self._position_task[guild_id].cancel()
-            
-            self._position_task[guild_id] = asyncio.create_task(
-                self._flush_position_changes(after.guild)
-            )
+            self._position_task[guild_id] = asyncio.create_task(self._flush_position_changes(after.guild))
             return
         
-        # Mudanças normais (nome, cor, permissões)
         await self._log_single_role_update(before, after)
     
     async def _flush_position_changes(self, guild: discord.Guild):
-        """Envia mudanças de posição agrupadas após 1 segundo"""
         await asyncio.sleep(1)
         
         queue = self._position_queue.pop(guild.id, {})
         if not queue:
             return
         
-        log_channel_id = await self.get_log_channel(guild.id, "role_update")
+        log_channel_id = await self._get_log_channel(guild.id, "role_update")
         if not log_channel_id:
             return
         
@@ -146,9 +128,7 @@ class RoleLogs(commands.Cog):
         if not log_channel:
             return
         
-        changes_list = []
-        for role_id, (old_pos, new_pos, role_name) in queue.items():
-            changes_list.append(f"**{role_name}**: {old_pos} → {new_pos}")
+        changes_list = [f"**{name}**: {old} → {new}" for _, (old, new, name) in queue.items()]
         
         embed = discord.Embed(
             title="🔢 Posições de cargos atualizadas",
@@ -169,28 +149,14 @@ class RoleLogs(commands.Cog):
         
         await log_channel.send(embed=embed)
         
-        await self.log_api.send_log(
-            guild_id=guild.id,
-            log_type="role_update",
-            data={
-                "type": "position_bulk",
-                "changes": [
-                    {
-                        "role_id": str(role_id),
-                        "role_name": role_name,
-                        "old_position": old_pos,
-                        "new_position": new_pos
-                    }
-                    for role_id, (old_pos, new_pos, role_name) in queue.items()
-                ]
-            }
-        )
+        await self.log_api.send_log(guild_id=guild.id, log_type="role_update", data={
+            "type": "position_bulk",
+            "changes": [{"role_id": str(rid), "role_name": name, "old_position": old, "new_position": new}
+                        for rid, (old, new, name) in queue.items()]
+        })
     
     async def _log_single_role_update(self, before: discord.Role, after: discord.Role):
-        """Log de cargo editado (mudanças não-posição)"""
-        
-        log_channel_id = await self.get_log_channel(after.guild.id, "role_update")
-        
+        log_channel_id = await self._get_log_channel(after.guild.id, "role_update")
         if not log_channel_id:
             return
         
@@ -202,48 +168,34 @@ class RoleLogs(commands.Cog):
         
         if before.name != after.name:
             changes["name"] = {"old": before.name, "new": after.name}
-        
         if before.color != after.color:
             changes["color"] = {"old": str(before.color), "new": str(after.color)}
-        
         if before.mentionable != after.mentionable:
             changes["mentionable"] = {"old": before.mentionable, "new": after.mentionable}
-        
         if before.hoist != after.hoist:
             changes["hoist"] = {"old": before.hoist, "new": after.hoist}
-        
         if before.permissions != after.permissions:
-            old_perms = [perm for perm, value in before.permissions if value]
-            new_perms = [perm for perm, value in after.permissions if value]
-            
-            added = set(new_perms) - set(old_perms)
-            removed = set(old_perms) - set(new_perms)
-            
+            old_perms = {p for p, v in before.permissions if v}
+            new_perms = {p for p, v in after.permissions if v}
+            added = new_perms - old_perms
+            removed = old_perms - new_perms
             if added or removed:
-                changes["permissions"] = {
-                    "added": list(added),
-                    "removed": list(removed)
-                }
+                changes["permissions"] = {"added": list(added), "removed": list(removed)}
         
         if not changes:
             return
         
         embed = discord.Embed(
-            title="✏️ Cargo editado",
-            description=f"Cargo **{after.name}**",
-            color=discord.Color.orange(),
-            timestamp=discord.utils.utcnow()
+            title="✏️ Cargo editado", description=f"Cargo **{after.name}**",
+            color=discord.Color.orange(), timestamp=discord.utils.utcnow()
         )
         
+        name_map = {
+            "name": "📛 Nome", "color": "🎨 Cor", "mentionable": "👁️ Mencionável",
+            "hoist": "📌 Exibir separado", "permissions": "🔒 Permissões"
+        }
+        
         for key, value in changes.items():
-            name_map = {
-                "name": "📛 Nome",
-                "color": "🎨 Cor",
-                "mentionable": "👁️ Mencionável",
-                "hoist": "📌 Exibir separado",
-                "permissions": "🔒 Permissões"
-            }
-            
             if key == "permissions":
                 perms_text = ""
                 if value.get("added"):
@@ -252,108 +204,50 @@ class RoleLogs(commands.Cog):
                     perms_text += f"❌ Removidas: {', '.join(value['removed'][:5])}"
                 embed.add_field(name=name_map[key], value=perms_text[:1024] or "-", inline=False)
             else:
-                embed.add_field(
-                    name=name_map.get(key, key),
-                    value=f"❌ {value['old']}\n✅ {value['new']}",
-                    inline=True
-                )
+                embed.add_field(name=name_map.get(key, key), value=f"❌ {value['old']}\n✅ {value['new']}", inline=True)
         
         await log_channel.send(embed=embed)
         
-        await self.log_api.send_log(
-            guild_id=after.guild.id,
-            log_type="role_update",
-            data={
-                "role_name": after.name,
-                "role_id": str(after.id),
-                "changes": {k: v for k, v in changes.items() if k != "permissions"},
-                "permission_changes": changes.get("permissions", {})
-            }
-        )
-        
-    # ═══════════════ MEMBER ROLE ADD ═══════════════
+        await self.log_api.send_log(guild_id=after.guild.id, log_type="role_update", data={
+            "role_name": after.name, "role_id": str(after.id),
+            "changes": {k: v for k, v in changes.items() if k != "permissions"},
+            "permission_changes": changes.get("permissions", {})
+        })
+    
+    # ═══════════════ MEMBER ROLE ADD/REMOVE ═══════════════
     
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        """Detecta mudança de cargos no membro"""
-        
         if before.roles == after.roles:
             return
         
         added_roles = set(after.roles) - set(before.roles)
         removed_roles = set(before.roles) - set(after.roles)
         
-        # Cargo adicionado
         for role in added_roles:
-            log_channel_id = await self.get_log_channel(after.guild.id, "member_role_add")
-            
-            if log_channel_id:
-                log_channel = after.guild.get_channel(log_channel_id)
-                if log_channel:
-                    embed = discord.Embed(
-                        title="👔 Cargo adicionado",
-                        description=f"Cargo adicionado a {after.mention}",
-                        color=discord.Color.green(),
-                        timestamp=discord.utils.utcnow()
-                    )
-                    embed.set_author(name=after.display_name, icon_url=after.display_avatar.url)
-                    embed.set_footer(text=f"ID: {after.id} | @{after.name}")
-                    
-                    embed.add_field(name="👤 Membro", value=after.mention, inline=True)
-                    embed.add_field(name="👔 Cargo", value=role.mention, inline=True)
-                    embed.add_field(name="🆔 Cargo ID", value=role.id, inline=True)
-                    
-                    await log_channel.send(embed=embed)
-            
-            await self.log_api.send_log(
-                guild_id=after.guild.id,
-                log_type="member_role_add",
-                target_id=after.id,
-                data={
-                    "user_name": after.name,
-                    "display_name": after.display_name,
-                    "user_avatar": str(after.display_avatar.url),
-                    "role_name": role.name,
-                    "role_id": str(role.id),
-                    "role_color": str(role.color)
-                }
-            )
+            await self._log_member_role(after, role, "member_role_add", "👔 Cargo adicionado",
+                                        f"Cargo adicionado a {after.mention}", discord.Color.green(), role.mention)
         
-        # Cargo removido
         for role in removed_roles:
-            log_channel_id = await self.get_log_channel(after.guild.id, "member_role_remove")
-            
-            if log_channel_id:
-                log_channel = after.guild.get_channel(log_channel_id)
-                if log_channel:
-                    embed = discord.Embed(
-                        title="👔 Cargo removido",
-                        description=f"Cargo removido de {after.mention}",
-                        color=discord.Color.red(),
-                        timestamp=discord.utils.utcnow()
-                    )
-                    embed.set_author(name=after.display_name, icon_url=after.display_avatar.url)
-                    embed.set_footer(text=f"ID: {after.id} | @{after.name}")
-                    
-                    embed.add_field(name="👤 Membro", value=after.mention, inline=True)
-                    embed.add_field(name="👔 Cargo", value=role.name, inline=True)
-                    embed.add_field(name="🆔 Cargo ID", value=role.id, inline=True)
-                    
-                    await log_channel.send(embed=embed)
-            
-            await self.log_api.send_log(
-                guild_id=after.guild.id,
-                log_type="member_role_remove",
-                target_id=after.id,
-                data={
-                    "user_name": after.name,
-                    "display_name": after.display_name,
-                    "user_avatar": str(after.display_avatar.url),
-                    "role_name": role.name,
-                    "role_id": str(role.id),
-                    "role_color": str(role.color)
-                }
-            )   
+            await self._log_member_role(after, role, "member_role_remove", "👔 Cargo removido",
+                                        f"Cargo removido de {after.mention}", discord.Color.red(), role.name)
+    
+    async def _log_member_role(self, member: discord.Member, role: discord.Role, log_type: str,
+                                title: str, description: str, color: discord.Color, role_display: str):
+        log_channel_id = await self._get_log_channel(member.guild.id, log_type)
+        
+        if log_channel_id:
+            log_channel = member.guild.get_channel(log_channel_id)
+            if log_channel:
+                embed = self._build_member_role_embed(member, title, description, color)
+                embed.add_field(name="👔 Cargo", value=role_display, inline=True)
+                embed.add_field(name="🆔 Cargo ID", value=role.id, inline=True)
+                await log_channel.send(embed=embed)
+        
+        await self.log_api.send_log(guild_id=member.guild.id, log_type=log_type, target_id=member.id, data={
+            **self._build_member_data(member),
+            "role_name": role.name, "role_id": str(role.id), "role_color": str(role.color)
+        })
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(RoleLogs(bot))
