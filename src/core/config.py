@@ -17,6 +17,9 @@ class Config:
     # Bot Server
     BOT_PORT: int = int(os.getenv('BOT_PORT', '8002'))
     
+    # Debug
+    DEBUG: bool = os.getenv('DEBUG', 'false').lower() == 'true'
+    
     # Validação
     if not TOKEN:
         raise ValueError("DISCORD_TOKEN não encontrado no arquivo .env")
