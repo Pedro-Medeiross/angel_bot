@@ -72,6 +72,19 @@ class Tickets(commands.Cog):
             return [c for c in data if c.get("is_active", True)]
         return []
     
+    async def _get_feedback_log_channel(self, guild_id: int) -> int | None:
+        """Busca canal de log de feedback"""
+        try:
+            async with aiohttp.ClientSession(auth=self.auth) as session:
+                url = f"{self.api_url}/guilds/{guild_id}/log-channel/ticket_feedback"
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get("channel_id")
+        except aiohttp.ClientError as e:
+            print(f"❌ Erro ao consultar API: {e}")
+        return None
+    
     async def _check_can_close(self, interaction: discord.Interaction, ticket_info: dict) -> tuple[bool, str]:
         user = interaction.user
         if user.guild_permissions.administrator:
@@ -285,15 +298,50 @@ class Tickets(commands.Cog):
         overwrites[guild.me] = discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
         await channel.edit(overwrites=overwrites)
         
-        # Mensagem
+        # Mensagem de fechamento
         title = "🔒 Ticket Fechado pelo Usuário" if role == "owner" else "🔒 Ticket Fechado"
         description = f"O usuário {user.mention} fechou este ticket." if role == "owner" else f"Ticket fechado por {user.mention}"
         embed = discord.Embed(title=title, description=description, color=discord.Color.red())
         embed.add_field(name="📝 Resolução", value=reason, inline=False)
         await channel.send(embed=embed)
         
-        # Transcript + API
+        # ⭐ BUSCA TICKET INFO PRIMEIRO (precisa do opener_id)
         ticket_info = await self._get_ticket_info(guild.id, ticket_id)
+        opener_id = ticket_info.get("user_id") if ticket_info else None
+        
+        # Embed de feedback para o usuário
+        if opener_id:
+            opener = guild.get_member(int(opener_id))
+            if opener and not opener.bot:
+                is_staff = opener.guild_permissions.administrator
+                if not is_staff:
+                    staff_roles = await self._get_staff_roles(guild.id)
+                    for sr in staff_roles:
+                        role = guild.get_role(int(sr["role_id"]))
+                        if role and role in opener.roles:
+                            is_staff = True
+                            break
+                
+                if not is_staff:
+                    from discord.ui import View, Button
+                    feedback_embed = discord.Embed(
+                        title="⭐ Como foi seu atendimento?",
+                        description=f"Seu ticket foi fechado.\n**Motivo:** {reason}\n\nDeixe seu feedback para nos ajudar a melhorar!",
+                        color=discord.Color.gold()
+                    )
+                    feedback_view = View(timeout=300)
+                    feedback_view.add_item(Button(
+                        label="Dar Feedback",
+                        style=discord.ButtonStyle.primary,
+                        custom_id=f"ticket_feedback_{ticket_id}",
+                        emoji="⭐"
+                    ))
+                    try:
+                        await channel.send(content=opener.mention, embed=feedback_embed, view=feedback_view)
+                    except:
+                        pass
+        
+        # Transcript + API (usa ticket_info já buscado)
         opened_by_name = "Desconhecido"
         opened_by_id = ""
         opened_at = "Desconhecido"

@@ -168,3 +168,11 @@ async def handle_interaction(cog, interaction: discord.Interaction):
         view = RemoveRoleView(ticket_id, cog)
         await interaction.response.send_message("👔 Selecione um cargo para remover:", view=view, ephemeral=True)
         return
+    
+    # ═════════ FEEDBACK ═════════
+    if custom_id.startswith("ticket_feedback_"):
+        ticket_id = custom_id.replace("ticket_feedback_", "")
+        from .views import FeedbackModal
+        modal = FeedbackModal(ticket_id, cog)
+        await interaction.response.send_modal(modal)
+        return
