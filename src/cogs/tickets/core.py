@@ -105,23 +105,45 @@ class Tickets(commands.Cog):
         for target, perm in channel.overwrites.items():
             overwrites[target] = perm
         
+        # User sempre tem acesso
         overwrites[user] = base_perms
-        overwrites[guild.me] = discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True, attach_files=True, embed_links=True, add_reactions=True)
+        
+        # Bot sempre tem acesso total
+        overwrites[guild.me] = discord.PermissionOverwrite(
+            read_messages=True, send_messages=True, manage_channels=True,
+            attach_files=True, embed_links=True, add_reactions=True
+        )
+        
+        # @everyone sem acesso
         overwrites[guild.default_role] = discord.PermissionOverwrite(read_messages=False)
         
-        for sr in staff_roles:
-            role = guild.get_role(int(sr["role_id"]))
-            if role and sr.get("can_view_all"):
-                overwrites[role] = base_perms
-        
-        for role in guild.roles:
-            if role.permissions.administrator and role.name != "@everyone":
-                overwrites[role] = base_perms
-        
         if claimed_by:
+            # ⭐ CLAIMADO: só fica can_view_all + admin + quem claimou + user
+            for sr in staff_roles:
+                role = guild.get_role(int(sr["role_id"]))
+                if role and sr.get("can_view_all"):
+                    overwrites[role] = base_perms
+                elif role:
+                    # Staff sem can_view_all → remove acesso
+                    overwrites[role] = discord.PermissionOverwrite(read_messages=False, send_messages=False)
+            
+            for role in guild.roles:
+                if role.permissions.administrator and role.name != "@everyone":
+                    overwrites[role] = base_perms
+            
             claimed_member = guild.get_member(int(claimed_by))
             if claimed_member:
                 overwrites[claimed_member] = base_perms
+        else:
+            # ⭐ NÃO CLAIMADO: todos staff veem
+            for sr in staff_roles:
+                role = guild.get_role(int(sr["role_id"]))
+                if role:
+                    overwrites[role] = base_perms
+            
+            for role in guild.roles:
+                if role.permissions.administrator and role.name != "@everyone":
+                    overwrites[role] = base_perms
         
         await channel.edit(overwrites=overwrites)
     
