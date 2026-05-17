@@ -37,12 +37,20 @@ class TicketEvent(BaseModel):
 class TicketCreatedEvent(TicketEvent):
     user_id: Union[str, int]
 
-class TicketClosedEvent(TicketEvent):
+class TicketClosedEvent(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    guild_id: int
+    ticket_id: str
     closed_by: Union[str, int]
     reason: Optional[str] = None
+    channel_id: Optional[Union[str, int]] = None
 
-class TicketClaimedEvent(TicketEvent):
+class TicketClaimedEvent(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    guild_id: int
+    ticket_id: str
     staff_id: Union[str, int]
+    channel_id: Optional[Union[str, int]] = None
 
 # ═══════════════ HELPERS ═══════════════
 
