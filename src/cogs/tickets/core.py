@@ -393,6 +393,7 @@ class Tickets(commands.Cog):
         
         await self._api_post(f"/guilds/{guild.id}/tickets/{ticket_id}/bot/close", {"closed_by": str(user.id), "reason": reason})
         
+        print(f"📋 Transcript URL: {transcript_url}")
         if transcript_url:
             config_data = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
             print(f'config data {config_data}')
