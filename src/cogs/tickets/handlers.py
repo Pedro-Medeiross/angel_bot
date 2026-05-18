@@ -8,6 +8,9 @@ async def handle_interaction(cog, interaction: discord.Interaction):
     
     custom_id = interaction.data["custom_id"]
     
+    if "feedback" in custom_id:
+        print(f"⭐ DEBUG feedback custom_id: {custom_id}")
+    
     # ═════════ ABRIR TICKET ═════════
     if custom_id.startswith("ticket_open_"):
         panel_id = custom_id.replace("ticket_open_", "")
@@ -167,12 +170,4 @@ async def handle_interaction(cog, interaction: discord.Interaction):
         from .views import RemoveRoleView
         view = RemoveRoleView(ticket_id, cog)
         await interaction.response.send_message("👔 Selecione um cargo para remover:", view=view, ephemeral=True)
-        return
-    
-    # ═════════ FEEDBACK ═════════
-    if custom_id.startswith("ticket_feedback_"):
-        ticket_id = custom_id.replace("ticket_feedback_", "")
-        from .views import FeedbackModal
-        modal = FeedbackModal(ticket_id, cog)
-        await interaction.response.send_modal(modal)
         return

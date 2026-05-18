@@ -28,7 +28,7 @@ class Tickets(commands.Cog):
             async with aiohttp.ClientSession(auth=self.auth) as session:
                 async with session.get(f"{self.api_url}{path}") as resp:
                     if resp.status == 200:
-                        return await resp.json()
+                        return await resp.json()    
         except aiohttp.ClientError as e:
             logger.error(f"❌ API GET {path}: {e}")
         return None
@@ -72,19 +72,6 @@ class Tickets(commands.Cog):
             return [c for c in data if c.get("is_active", True)]
         return []
     
-    async def _get_feedback_log_channel(self, guild_id: int) -> int | None:
-        """Busca canal de log de feedback"""
-        try:
-            async with aiohttp.ClientSession(auth=self.auth) as session:
-                url = f"{self.api_url}/guilds/{guild_id}/log-channel/ticket_feedback"
-                async with session.get(url) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return data.get("channel_id")
-        except aiohttp.ClientError as e:
-            print(f"❌ Erro ao consultar API: {e}")
-        return None
-    
     async def _check_can_close(self, interaction: discord.Interaction, ticket_info: dict) -> tuple[bool, str]:
         user = interaction.user
         if user.guild_permissions.administrator:
@@ -118,26 +105,19 @@ class Tickets(commands.Cog):
         for target, perm in channel.overwrites.items():
             overwrites[target] = perm
         
-        # User sempre tem acesso
         overwrites[user] = base_perms
-        
-        # Bot sempre tem acesso total
         overwrites[guild.me] = discord.PermissionOverwrite(
             read_messages=True, send_messages=True, manage_channels=True,
             attach_files=True, embed_links=True, add_reactions=True
         )
-        
-        # @everyone sem acesso
         overwrites[guild.default_role] = discord.PermissionOverwrite(read_messages=False)
         
         if claimed_by:
-            # ⭐ CLAIMADO: só fica can_view_all + admin + quem claimou + user
             for sr in staff_roles:
                 role = guild.get_role(int(sr["role_id"]))
                 if role and sr.get("can_view_all"):
                     overwrites[role] = base_perms
                 elif role:
-                    # Staff sem can_view_all → remove acesso
                     overwrites[role] = discord.PermissionOverwrite(read_messages=False, send_messages=False)
             
             for role in guild.roles:
@@ -148,7 +128,6 @@ class Tickets(commands.Cog):
             if claimed_member:
                 overwrites[claimed_member] = base_perms
         else:
-            # ⭐ NÃO CLAIMADO: todos staff veem
             for sr in staff_roles:
                 role = guild.get_role(int(sr["role_id"]))
                 if role:
@@ -243,7 +222,6 @@ class Tickets(commands.Cog):
         
         ticket_id = result.get("id")
         
-        # Permissões iniciais
         staff_roles = await self._get_staff_roles(guild.id)
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
@@ -305,50 +283,16 @@ class Tickets(commands.Cog):
         embed.add_field(name="📝 Resolução", value=reason, inline=False)
         await channel.send(embed=embed)
         
-        # ⭐ BUSCA TICKET INFO PRIMEIRO (precisa do opener_id)
+        # Busca ticket info
         ticket_info = await self._get_ticket_info(guild.id, ticket_id)
         opener_id = ticket_info.get("user_id") if ticket_info else None
         
-        # Embed de feedback para o usuário
-        if opener_id:
-            opener = guild.get_member(int(opener_id))
-            if opener and not opener.bot:
-                is_staff = opener.guild_permissions.administrator
-                if not is_staff:
-                    staff_roles = await self._get_staff_roles(guild.id)
-                    for sr in staff_roles:
-                        role = guild.get_role(int(sr["role_id"]))
-                        if role and role in opener.roles:
-                            is_staff = True
-                            break
-                
-                if not is_staff:
-                    from discord.ui import View, Button
-                    feedback_embed = discord.Embed(
-                        title="⭐ Como foi seu atendimento?",
-                        description=f"Seu ticket foi fechado.\n**Motivo:** {reason}\n\nDeixe seu feedback para nos ajudar a melhorar!",
-                        color=discord.Color.gold()
-                    )
-                    feedback_view = View(timeout=300)
-                    feedback_view.add_item(Button(
-                        label="Dar Feedback",
-                        style=discord.ButtonStyle.primary,
-                        custom_id=f"ticket_feedback_{ticket_id}",
-                        emoji="⭐"
-                    ))
-                    try:
-                        await channel.send(content=opener.mention, embed=feedback_embed, view=feedback_view)
-                    except:
-                        pass
-        
-        # Transcript + API (usa ticket_info já buscado)
         opened_by_name = "Desconhecido"
         opened_by_id = ""
         opened_at = "Desconhecido"
         ticket_number = ""
         
         if ticket_info:
-            opener_id = ticket_info.get("user_id")
             if opener_id:
                 opener = guild.get_member(int(opener_id))
                 if opener:
@@ -357,6 +301,7 @@ class Tickets(commands.Cog):
             opened_at = ticket_info.get("created_at", "Desconhecido")
             ticket_number = str(ticket_info.get("ticket_number", ""))
         
+        # Gera transcript
         transcript_url = None
         try:
             messages_data = []
@@ -391,14 +336,53 @@ class Tickets(commands.Cog):
         except Exception as e:
             logger.error(f"❌ Erro ao gerar/enviar transcript: {e}")
         
+        # DM com transcript (sem feedback)
+        if opener_id:
+            opener = guild.get_member(int(opener_id))
+            if opener and not opener.bot:
+                is_staff = opener.guild_permissions.administrator
+                if not is_staff:
+                    staff_roles = await self._get_staff_roles(guild.id)
+                    for sr in staff_roles:
+                        role = guild.get_role(int(sr["role_id"]))
+                        if role and role in opener.roles:
+                            is_staff = True
+                            break
+                
+                if not is_staff:
+                    try:
+                        dm_embed = discord.Embed(
+                            title="🔒 Ticket Fechado",
+                            description=f"Este ticket foi fechado por {user.mention}.",
+                            color=discord.Color.blue()
+                        )
+                        dm_embed.add_field(name="📝 Motivo", value=reason, inline=False)
+                        dm_embed.add_field(name="📋 Nome do Ticket", value=f"ticket-{ticket_number}", inline=True)
+                        dm_embed.add_field(name="🌐 Servidor", value=guild.name, inline=True)
+                        
+                        dm_view = View(timeout=None)
+                        if transcript_url:
+                            dm_view.add_item(Button(
+                                label="Ver Transcrição",
+                                style=discord.ButtonStyle.link,
+                                url=transcript_url,
+                                emoji="📄"
+                            ))
+                        
+                        await opener.send(embed=dm_embed, view=dm_view)
+                        logger.info(f"📧 Transcript enviado no privado de {opener.name}")
+                    except discord.Forbidden:
+                        logger.warning(f"❌ Não foi possível enviar DM para {opener.name}")
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao enviar DM: {e}")
+        
+        # Fecha na API
         await self._api_post(f"/guilds/{guild.id}/tickets/{ticket_id}/bot/close", {"closed_by": str(user.id), "reason": reason})
         
-        print(f"📋 Transcript URL: {transcript_url}")
+        # Transcript no canal configurado
         if transcript_url:
             config_data = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
-            print(f'config data {config_data}')
             transcript_channel_id = config_data.get("transcript_channel") if config_data else None
-            print(f'channel_id {transcript_channel_id}')
             if transcript_channel_id:
                 transcript_channel = guild.get_channel(int(transcript_channel_id))
                 if transcript_channel:
@@ -527,7 +511,6 @@ class Tickets(commands.Cog):
                     if hours_inactive < auto_close_hours:
                         continue
                     
-                    # Transcript
                     messages_data = []
                     async for message in channel.history(oldest_first=True, limit=500):
                         if message.author.bot and message.embeds:
