@@ -395,7 +395,9 @@ class Tickets(commands.Cog):
         
         if transcript_url:
             config_data = await self._api_get(f"/guilds/{guild.id}/tickets/bot/config")
+            print(f'config data {config_data}')
             transcript_channel_id = config_data.get("transcript_channel") if config_data else None
+            print(f'channel_id {transcript_channel_id}')
             if transcript_channel_id:
                 transcript_channel = guild.get_channel(int(transcript_channel_id))
                 if transcript_channel:
